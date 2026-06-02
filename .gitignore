@@ -1,0 +1,30 @@
+# Compiled object/library files
+*.o
+*.a
+*.so
+*.dylib
+
+# Test / coverage output
+*.test
+*.out
+coverage.*
+
+# Built command binaries (Go binaries have no extension)
+# At the repo root (e.g. `go build ./cmd/<name>`):
+/alpacasim
+/alpacadiscover
+/discover_proxy
+# In-place inside a cmd dir (named after the dir, or the legacy "main"):
+/cmd/*/main
+/cmd/alpacasim/alpacasim
+/cmd/alpacadiscover/alpacadiscover
+/cmd/discover_proxy/discover_proxy
+
+# Local Go workspace (machine-specific; lives in parent dir but ignore defensively)
+go.work
+go.work.sum
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*~
