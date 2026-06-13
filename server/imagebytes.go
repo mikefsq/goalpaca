@@ -1,6 +1,42 @@
 package alpacadev
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+)
+
+// imageBufPool recycles the large ImageBytes output buffers (a 62 MP RAW16 frame is
+// ~122 MB) so steady-state capture doesn't allocate and GC one per frame. Holds *[]byte
+// to avoid the per-Put interface-boxing allocation. sync.Pool drops entries on GC, so an
+// idle camera doesn't pin the memory.
+var imageBufPool sync.Pool
+
+// getImageBuf returns a buffer of exactly n bytes, reusing a pooled one when large enough.
+func getImageBuf(n int) []byte {
+	if v := imageBufPool.Get(); v != nil {
+		if b := v.(*[]byte); cap(*b) >= n {
+			return (*b)[:n]
+		}
+	}
+	return make([]byte, n)
+}
+
+// putImageBuf returns a buffer to the pool. Safe to call after w.Write returns — the
+// http stack has copied the body into the connection by then.
+func putImageBuf(b []byte) { imageBufPool.Put(&b) }
+
+// imageDebug enables per-frame ImageBytes timing on the console (encode vs write
+// milliseconds). Off by default; set GOALPACA_IMAGE_DEBUG=1 (or true/yes/on).
+var imageDebug = func() bool {
+	switch strings.ToLower(os.Getenv("GOALPACA_IMAGE_DEBUG")) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}()
 
 // ImageBytesMIME is the Accept/Content-Type value for the ASCOM ImageBytes
 // binary image transport.
@@ -18,16 +54,133 @@ const imageBytesMetadataVersion = 1
 // 16-bit frame) this is the only practical transport — ImageArray-JSON is
 // unusable at that size.
 func EncodeImageBytes(frame ImageFrame, clientTxID, serverTxID uint32) []byte {
+	buf := make([]byte, imageBytesMetadataLen+len(frame.Pixels))
+	encodeImageBytesInto(buf, frame, clientTxID, serverTxID)
+	return buf
+}
+
+// encodeImageBytesInto writes the full ImageBytes message (44-byte header + pixels)
+// into dst, which MUST be exactly imageBytesMetadataLen+len(frame.Pixels) bytes. A
+// Rank-2 frame is transposed from the driver's row-major order to ASCOM's column-major
+// wire order DIRECTLY into dst's pixel region — fused, with no intermediate buffer.
+//
+// ASCOM ImageBytes/ImageArray is a [Width,Height] array serialized with the SECOND
+// dimension (Y/Height) varying fastest, i.e. column-major in image terms; sensors read
+// out row-major (X fastest), so a non-square frame must be transposed or it renders as a
+// diagonal shear in clients (e.g. N.I.N.A.). Rank-3 (colour planes) is copied untouched.
+func encodeImageBytesInto(dst []byte, frame ImageFrame, clientTxID, serverTxID uint32) {
 	transmit := frame.TransmissionElementType
 	if transmit == 0 {
 		transmit = frame.ElementType
 	}
-
-	buf := make([]byte, imageBytesMetadataLen+len(frame.Pixels))
-	putImageBytesHeader(buf, 0, clientTxID, serverTxID, frame.ElementType, transmit,
+	putImageBytesHeader(dst, 0, clientTxID, serverTxID, frame.ElementType, transmit,
 		frame.Rank, frame.Width, frame.Height, frame.Planes)
-	copy(buf[imageBytesMetadataLen:], frame.Pixels)
-	return buf
+	out := dst[imageBytesMetadataLen:]
+	if es := elemBytes(transmit); frame.Rank == 2 && es > 0 &&
+		frame.Width > 0 && frame.Height > 0 && len(frame.Pixels) == frame.Width*frame.Height*es {
+		transposeInto(out, frame.Pixels, frame.Height, frame.Width, es)
+	} else {
+		copy(out, frame.Pixels)
+	}
+}
+
+// elemBytes is the wire size in bytes of one pixel element, or 0 if unknown.
+func elemBytes(t ImageElementType) int {
+	switch t {
+	case ImgByte:
+		return 1
+	case ImgInt16, ImgUInt16:
+		return 2
+	case ImgInt32, ImgUInt32, ImgSingle:
+		return 4
+	case ImgInt64, ImgUInt64, ImgDouble:
+		return 8
+	}
+	return 0
+}
+
+// transposeTile is the block size (elements) for the cache-blocked transpose. A column
+// write strides by rows*es bytes, so processing a tile keeps both src and dst footprints
+// within cache. parallelMinElems is the element count above which the transpose fans out
+// across cores (a 62 MP frame moves ~244 MB read+write; below this the goroutine setup
+// outweighs the gain).
+const (
+	transposeTile    = 64
+	parallelMinElems = 1 << 20
+)
+
+// transposeElems returns the element-wise transpose of a rows×cols grid stored row-major
+// as a cols×rows grid stored row-major; es is the per-element size in bytes. Allocating
+// wrapper around transposeInto, used by DecodeImageBytes (the cold Go-client path).
+func transposeElems(src []byte, rows, cols, es int) []byte {
+	dst := make([]byte, len(src))
+	transposeInto(dst, src, rows, cols, es)
+	return dst
+}
+
+// transposeInto writes the transpose of src (rows×cols, row-major, es-byte elements)
+// into dst (cols×rows, row-major). Cache-blocked and, for large frames, parallelized
+// across row-bands — disjoint row ranges write disjoint dst columns, so no locking.
+func transposeInto(dst, src []byte, rows, cols, es int) {
+	if rows*cols >= parallelMinElems {
+		workers := runtime.GOMAXPROCS(0)
+		if workers > rows {
+			workers = rows
+		}
+		if workers > 1 {
+			band := (rows + workers - 1) / workers
+			var wg sync.WaitGroup
+			for r0 := 0; r0 < rows; r0 += band {
+				r1 := r0 + band
+				if r1 > rows {
+					r1 = rows
+				}
+				wg.Add(1)
+				go func(r0, r1 int) {
+					defer wg.Done()
+					transposeBand(dst, src, rows, cols, es, r0, r1)
+				}(r0, r1)
+			}
+			wg.Wait()
+			return
+		}
+	}
+	transposeBand(dst, src, rows, cols, es, 0, rows)
+}
+
+// transposeBand transposes source rows [r0,r1) into dst, cache-blocked over tiles.
+func transposeBand(dst, src []byte, rows, cols, es, r0, r1 int) {
+	for rt := r0; rt < r1; rt += transposeTile {
+		rEnd := min(rt+transposeTile, r1)
+		for ct := 0; ct < cols; ct += transposeTile {
+			cEnd := min(ct+transposeTile, cols)
+			switch es {
+			case 1:
+				for r := rt; r < rEnd; r++ {
+					sBase := r * cols
+					for c := ct; c < cEnd; c++ {
+						dst[c*rows+r] = src[sBase+c]
+					}
+				}
+			case 2:
+				for r := rt; r < rEnd; r++ {
+					sBase := r * cols * 2
+					for c := ct; c < cEnd; c++ {
+						d := (c*rows + r) * 2
+						s := sBase + c*2
+						dst[d] = src[s]
+						dst[d+1] = src[s+1]
+					}
+				}
+			default:
+				for r := rt; r < rEnd; r++ {
+					for c := ct; c < cEnd; c++ {
+						copy(dst[(c*rows+r)*es:(c*rows+r)*es+es], src[(r*cols+c)*es:(r*cols+c)*es+es])
+					}
+				}
+			}
+		}
+	}
 }
 
 // EncodeImageBytesError serializes an error in the ImageBytes envelope: the
@@ -75,7 +228,7 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 	if errNum != 0 {
 		return ImageFrame{}, &AlpacaError{Number: int(errNum), Message: string(data[dataStart:])}
 	}
-	return ImageFrame{
+	frame := ImageFrame{
 		ElementType:             ImageElementType(le.Uint32(data[20:])),
 		TransmissionElementType: ImageElementType(le.Uint32(data[24:])),
 		Rank:                    int(le.Uint32(data[28:])),
@@ -83,5 +236,16 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 		Height:                  int(le.Uint32(data[36:])),
 		Planes:                  int(le.Uint32(data[40:])),
 		Pixels:                  append([]byte(nil), data[dataStart:]...),
-	}, nil
+	}
+	// Reverse the encode-time transpose (ASCOM column-major wire → sensor row-major),
+	// so callers of the Go client get natural row-major pixels. See EncodeImageBytes.
+	transmit := frame.TransmissionElementType
+	if transmit == 0 {
+		transmit = frame.ElementType
+	}
+	if es := elemBytes(transmit); frame.Rank == 2 && es > 0 &&
+		frame.Width > 0 && frame.Height > 0 && len(frame.Pixels) == frame.Width*frame.Height*es {
+		frame.Pixels = transposeElems(frame.Pixels, frame.Width, frame.Height, es)
+	}
+	return frame, nil
 }

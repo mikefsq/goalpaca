@@ -54,9 +54,11 @@ const (
 // ImageFrame is one image ready for transport. The driver fills it (typically
 // from its SDK's raw buffer); the library encodes it as ImageBytes.
 //
-// Pixels are raw little-endian in TransmissionElementType order. For a
-// Bayer/mono sensor: Rank 2, Planes 0. For RGB color: Rank 3, Planes 3, pixels
-// laid out per the ImageBytes plane convention (see imagebytes.go).
+// Pixels are raw little-endian in TransmissionElementType order, in natural
+// sensor ROW-MAJOR order (X fastest) — the encoder transposes a Rank-2 frame to
+// ASCOM's column-major ImageBytes wire order, so drivers just hand over the SDK
+// buffer as-is. For a Bayer/mono sensor: Rank 2, Planes 0. For RGB color: Rank 3,
+// Planes 3, pixels laid out per the ImageBytes plane convention (see imagebytes.go).
 type ImageFrame struct {
 	Rank                    int              // 2 (mono/Bayer) or 3 (color planes)
 	Width                   int              // dimension 1

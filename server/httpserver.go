@@ -322,7 +322,19 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, dev Device,
 	}
 
 	w.Header().Set("Content-Type", ImageBytesMIME)
-	_, _ = w.Write(EncodeImageBytes(frame, p.clientTransactionID, serverTx))
+	buf := getImageBuf(imageBytesMetadataLen + len(frame.Pixels))
+	defer putImageBuf(buf)
+	encStart := time.Now()
+	encodeImageBytesInto(buf, frame, p.clientTransactionID, serverTx)
+	encMs := float64(time.Since(encStart).Microseconds()) / 1000
+	w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
+	wrStart := time.Now()
+	_, _ = w.Write(buf)
+	if imageDebug && s.cfg.Logger != nil {
+		wrMs := float64(time.Since(wrStart).Microseconds()) / 1000
+		s.cfg.Logger.Printf("imagebytes %dx%d rank%d: %d bytes  encode=%.1fms write=%.1fms",
+			frame.Width, frame.Height, frame.Rank, len(buf), encMs, wrMs)
+	}
 }
 
 // handleManagement serves the /management endpoints.
