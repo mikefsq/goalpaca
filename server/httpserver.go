@@ -119,6 +119,19 @@ var interruptMembers = map[string]bool{
 	"halt":          true,
 }
 
+// passthroughMembers are the raw vendor command passthroughs (ASCOM Command*). They
+// are opaque — the server can't tell a read from a write through them — and plugins
+// send read-only queries this way that must work mid-slew (e.g. the NINA 10Micron
+// plugin reading meridian limits / the alignment model while the mount moves). A
+// native COM driver doesn't motion-gate them, so neither do we: the device itself
+// arbitrates an inappropriate command. They are NOT connection-exempt (a passthrough
+// to a disconnected device still returns NotConnected).
+var passthroughMembers = map[string]bool{
+	"commandstring": true,
+	"commandbool":   true,
+	"commandblind":  true,
+}
+
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, devType DeviceType,
 	member string, dev Device, p params, serverTx uint32) {
 
@@ -217,7 +230,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, devType Devic
 	// progress. Reads (GET) are never gated this way; the connection controls and
 	// explicit interrupts (abort/stop/halt) are exempt so a client can always
 	// disconnect or stop the device.
-	if !connectionExemptMembers[member] && !interruptMembers[member] {
+	if !connectionExemptMembers[member] && !interruptMembers[member] && !passthroughMembers[member] {
 		if busy, ok := dev.(Busyable); ok && busy.Busy() {
 			writeMethod(w, ErrInvalidOperation, p.clientTransactionID, serverTx)
 			return

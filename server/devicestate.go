@@ -167,8 +167,18 @@ func telescopeStateValues(t Telescope) []StateValue {
 		{Name: "IsPulseGuiding", Value: t.IsPulseGuiding()},
 		{Name: "RightAscension", Value: t.RightAscension()},
 		{Name: "SideOfPier", Value: int(t.SideOfPier())},
+		{Name: "SiderealTime", Value: t.SiderealTime()},
 		{Name: "Slewing", Value: t.Slewing()},
 		{Name: "Tracking", Value: t.Tracking()},
 		{Name: "UTCDate", Value: t.UTCDate()},
+		// Operational rate values beyond the standard ASCOM telescope DeviceState set.
+		// Not mandated, but cheap to include and consumed from the batch by generic
+		// clients (the NINA 10Micron plugin path) that would otherwise GET each one per
+		// poll cycle; clients that don't recognise them ignore the extra entries.
+		{Name: "GuideRateRightAscension", Value: t.GuideRateRightAscension()},
+		{Name: "GuideRateDeclination", Value: t.GuideRateDeclination()},
+		{Name: "RightAscensionRate", Value: t.RightAscensionRate()},
+		{Name: "DeclinationRate", Value: t.DeclinationRate()},
+		{Name: "TrackingRate", Value: int(t.TrackingRate())},
 	}
 }

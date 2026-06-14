@@ -77,6 +77,14 @@ func TestBusyGating(t *testing.T) {
 		t.Errorf("busy abortexposure ErrorNumber = %#x, want success", mr.ErrorNumber)
 	}
 
+	// Command* passthroughs are NOT Busy-gated: a raw vendor command (here a
+	// not-implemented stub → 0x400) reaches the device instead of being rejected with
+	// InvalidOperation, so a plugin's read-only queries work mid-slew (the 10Micron
+	// meridian-limit / alignment-model reads the NINA plugin needs over Alpaca).
+	if mr := put(t, s, "/api/v1/camera/0/commandstring", url.Values{"Command": {":X#"}, "Raw": {"true"}}); mr.ErrorNumber == ErrNumInvalidOperation {
+		t.Errorf("busy commandstring was Busy-gated (%#x); passthroughs must not be", mr.ErrorNumber)
+	}
+
 	// Once idle, mutating PUTs are allowed again.
 	cam.busy = false
 	if mr := put(t, s, "/api/v1/camera/0/gain", url.Values{"Gain": {"5"}}); mr.ErrorNumber != 0 {
