@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -38,6 +40,13 @@ type DiscoveryConfig struct {
 type Config struct {
 	AlpacaPort int // device HTTP REST port (e.g. 11111)
 	Discovery  DiscoveryConfig
+
+	// Hosts restricts the local addresses the HTTP server binds to, one listener
+	// per address (e.g. []string{"127.0.0.1", "10.0.1.20"}). Empty (the default)
+	// binds the wildcard ":port", i.e. every interface on both IP stacks. Use it to
+	// keep the device off interfaces like a VM bridge. An address that fails to bind
+	// is logged and skipped; if none bind, Run returns an error.
+	Hosts []string
 
 	// Management metadata (served at /management/v1/description).
 	ServerName          string
@@ -121,20 +130,42 @@ func (s *Server) Run(ctx context.Context) error {
 	// 1. Open hardware once for every Hardware-implementing device.
 	opened := s.openHardware(ctx)
 
-	// 2. HTTP server.
+	// 2. HTTP server. Bind the wildcard (:port, every interface) by default, or one
+	// listener per address when Config.Hosts restricts it.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.ServeHTTP)
-	s.http = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.cfg.AlpacaPort),
-		Handler: mux,
-	}
+	s.http = &http.Server{Handler: mux}
 
 	httpErr := make(chan error, 1)
-	go func() {
-		if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	serve := func(ln net.Listener) {
+		if err := s.http.Serve(ln); err != nil && err != http.ErrServerClosed {
 			httpErr <- err
 		}
-	}()
+	}
+	if len(s.cfg.Hosts) == 0 {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.AlpacaPort))
+		if err != nil {
+			s.closeHardware(context.Background(), opened)
+			return err
+		}
+		go serve(ln)
+	} else {
+		bound := 0
+		for _, h := range s.cfg.Hosts {
+			addr := net.JoinHostPort(h, strconv.Itoa(s.cfg.AlpacaPort))
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				fmt.Printf("alpacadev: listen %s failed: %v\n", addr, err)
+				continue
+			}
+			bound++
+			go serve(ln)
+		}
+		if bound == 0 {
+			s.closeHardware(context.Background(), opened)
+			return fmt.Errorf("alpacadev: could not bind any of %v on port %d", s.cfg.Hosts, s.cfg.AlpacaPort)
+		}
+	}
 
 	// 3. Discovery (responder or heartbeat ticker).
 	discoveryCtx, stopDiscovery := context.WithCancel(ctx)
