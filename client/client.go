@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -94,9 +95,25 @@ func (d *Device) ClientID() uint32   { return d.clientID }
 func normalizeBaseURL(address string) string {
 	a := strings.TrimSpace(address)
 	if !strings.Contains(a, "://") {
-		a = "http://" + a
+		a = "http://" + urlAuthority(a)
 	}
 	return strings.TrimRight(a, "/")
+}
+
+// urlAuthority converts a dialable host:port — which may carry a raw IPv6 zone such as
+// "[fe80::1%eth0]:11111" — into an authority safe to embed in a URL. RFC 6874 requires the
+// zone delimiter '%' to be written as "%25"; a raw "%zone" is otherwise rejected by the URL
+// parser as an invalid escape, so link-local IPv6 servers (the ones Alpaca IPv6 discovery
+// finds) can't be reached. Addresses without a zone pass through unchanged.
+func urlAuthority(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr // not host:port — leave as-is
+	}
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i] + "%25" + host[i+1:]
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // prepare builds an Alpaca request with ClientID + an incrementing

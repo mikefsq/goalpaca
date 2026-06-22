@@ -209,7 +209,7 @@ type ConfiguredDevice struct {
 // ConfiguredDevices queries the server's /management/v1/configureddevices and
 // returns the devices it hosts.
 func (s DiscoveredServer) ConfiguredDevices() ([]ConfiguredDevice, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/management/v1/configureddevices", s.Address))
+	resp, err := http.Get(fmt.Sprintf("http://%s/management/v1/configureddevices", urlAuthority(s.Address)))
 	if err != nil {
 		return nil, err
 	}
