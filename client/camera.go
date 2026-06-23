@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net/url"
 
 	alpaca "github.com/mikefsq/goalpaca/server"
@@ -78,6 +79,12 @@ func (c *Camera) SetSubExposureDuration(seconds float64) error {
 // ImageArray fetches the latest frame via the binary ImageBytes transport and
 // decodes it into an ImageFrame.
 func (c *Camera) ImageArray() (alpaca.ImageFrame, error) { return c.getImageBytes("imagearray") }
+
+// ImageArrayCtx is ImageArray with a caller context: cancelling ctx aborts the in-flight transfer
+// (so an aborted capture stops the download promptly rather than orphaning it).
+func (c *Camera) ImageArrayCtx(ctx context.Context) (alpaca.ImageFrame, error) {
+	return c.getImageBytesCtx(ctx, "imagearray")
+}
 
 // Gain / Offset.
 func (c *Camera) Gain() (int, error)         { return c.getInt("gain") }

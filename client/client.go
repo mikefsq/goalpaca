@@ -7,6 +7,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -219,10 +220,18 @@ func (d *Device) put(member string, params url.Values) error {
 // decodes the result into an ImageFrame. A device error carried in the
 // ImageBytes envelope (or a JSON error envelope) becomes *alpaca.AlpacaError.
 func (d *Device) getImageBytes(member string) (alpaca.ImageFrame, error) {
+	return d.getImageBytesCtx(context.Background(), member)
+}
+
+// getImageBytesCtx is getImageBytes with a caller context: cancelling ctx aborts the in-flight
+// HTTP transfer (the large ImageBytes body read), so an aborted capture tears the download down
+// instead of orphaning it until the client timeout.
+func (d *Device) getImageBytesCtx(ctx context.Context, member string) (alpaca.ImageFrame, error) {
 	req, err := d.prepare(http.MethodGet, member, nil)
 	if err != nil {
 		return alpaca.ImageFrame{}, err
 	}
+	req = req.WithContext(ctx)
 	req.Header.Set("Accept", alpaca.ImageBytesMIME)
 	resp, err := d.http.Do(req)
 	if err != nil {
