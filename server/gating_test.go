@@ -91,3 +91,51 @@ func TestBusyGating(t *testing.T) {
 		t.Errorf("idle set gain ErrorNumber = %#x, want success", mr.ErrorNumber)
 	}
 }
+
+// fakeTelescope is a minimal Busyable telescope for the motion-interrupt gating test.
+type fakeTelescope struct {
+	BaseTelescope
+	busy    bool
+	aborted bool
+}
+
+func (t *fakeTelescope) Busy() bool { return t.busy }
+func (t *fakeTelescope) AbortSlew() error {
+	t.aborted = true
+	return nil
+}
+func (t *fakeTelescope) MoveAxis(TelescopeAxis, float64) error { return nil }
+
+func newFakeTelescope() *fakeTelescope {
+	tel := &fakeTelescope{}
+	tel.ID = "fake-scope-1"
+	tel.DevName = "FakeScope"
+	tel.IfaceVer = 4
+	return tel
+}
+
+// TestBusyGatingTelescopeMotion verifies AbortSlew halts a busy (slewing) mount —
+// it must bypass the Busy gate, since it is THE interrupt that ends the motion —
+// while MoveAxis (a motion INITIATOR) stays gated with InvalidOperation.
+func TestBusyGatingTelescopeMotion(t *testing.T) {
+	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	tel := newFakeTelescope()
+	tel.MarkConnected()
+	tel.busy = true
+	if err := s.Register(TelescopeType, 0, tel); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// AbortSlew must work while busy and actually reach the device.
+	if mr := put(t, s, "/api/v1/telescope/0/abortslew", url.Values{}); mr.ErrorNumber != 0 {
+		t.Errorf("busy abortslew ErrorNumber = %#x, want success", mr.ErrorNumber)
+	}
+	if !tel.aborted {
+		t.Error("busy abortslew did not reach the device")
+	}
+
+	// MoveAxis (an initiator) stays gated while busy.
+	if mr := put(t, s, "/api/v1/telescope/0/moveaxis", url.Values{"Axis": {"0"}, "Rate": {"1.5"}}); mr.ErrorNumber != ErrNumInvalidOperation {
+		t.Errorf("busy moveaxis ErrorNumber = %#x, want InvalidOperation %#x", mr.ErrorNumber, ErrNumInvalidOperation)
+	}
+}

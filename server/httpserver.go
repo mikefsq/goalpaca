@@ -117,6 +117,12 @@ var interruptMembers = map[string]bool{
 	"abortexposure": true,
 	"stopexposure":  true,
 	"halt":          true,
+	// AbortSlew is THE way a client halts a slew or a continuous MoveAxis move (both set
+	// Slewing → Busy), so it must work while Busy — without this it returns
+	// InvalidOperation and the mount can never be stopped. MoveAxis is deliberately NOT
+	// here: with a nonzero rate it INITIATES motion, and the gate exists to stop a second
+	// initiator clobbering one in progress; AbortSlew is the interrupt that stops a move.
+	"abortslew": true,
 }
 
 // passthroughMembers are the raw vendor command passthroughs (ASCOM Command*). They
