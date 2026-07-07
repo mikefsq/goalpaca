@@ -4,13 +4,13 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Focuser is a simulated absolute ASCOM Focuser. The position converges on the
 // target at a fixed step rate (computed from the clock).
 type Focuser struct {
-	alpacadev.BaseFocuser
+	server.BaseFocuser
 
 	mu        sync.Mutex
 	maxStep   int

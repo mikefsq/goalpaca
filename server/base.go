@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"context"
@@ -58,16 +58,26 @@ func (b *BaseDevice) Connected() bool {
 // ConnectOp.
 func (b *BaseDevice) Connecting() bool { return b.connectOp.Busy() }
 
+// ConnectError reports the failure of the last async Connect/Disconnect run
+// through ConnectOp, or nil. Implements ConnectErrorReporter, so the HTTP
+// layer surfaces the failure in-band on the `connecting` completion property.
+func (b *BaseDevice) ConnectError() error { return b.connectOp.Err() }
+
 // ConnectOp exposes the async-connect Op for authors implementing Platform 7
 // async Connect/Disconnect.
 func (b *BaseDevice) ConnectOp() *Op { return &b.connectOp }
 
+// MarkConnected sets the logical Connected flag true. It has no hardware
+// effect (the Alpaca Connected flag is a per-client session marker); a driver
+// overriding Connect calls it once the session is established.
 func (b *BaseDevice) MarkConnected() {
 	b.mu.Lock()
 	b.connected = true
 	b.mu.Unlock()
 }
 
+// MarkDisconnected sets the logical Connected flag false. The mirror of
+// MarkConnected; the hardware stays up.
 func (b *BaseDevice) MarkDisconnected() {
 	b.mu.Lock()
 	b.connected = false
@@ -94,8 +104,8 @@ func (b *BaseDevice) CommandBlind(cmd string, raw bool) error {
 	return ErrNotImplemented
 }
 
-// DeviceState defaults to just the connection flag. Per-type devices override
-// this to batch their commonly-polled getters.
-func (b *BaseDevice) DeviceState() []StateValue {
-	return []StateValue{{Name: "Connected", Value: b.Connected()}}
-}
+// DeviceState defaults to nothing extra: the library already builds the
+// standard operational set from the typed getters. Override to ADD entries the
+// library cannot derive (per-switch values, vendor extras) or to override a
+// built entry by name — the result is merged into the built set.
+func (b *BaseDevice) DeviceState() []StateValue { return nil }

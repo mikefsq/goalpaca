@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // OpticsStore is the shared source of truth for a telescope's optical-train
 // parameters — the mount itself can't report them, so they come from config and

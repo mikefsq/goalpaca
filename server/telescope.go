@@ -1,59 +1,6 @@
-package alpacadev
+package server
 
-// Telescope enums (mirror the ASCOM definitions).
-
-type AlignmentMode int
-
-const (
-	AlignAltAz       AlignmentMode = 0
-	AlignPolar       AlignmentMode = 1
-	AlignGermanPolar AlignmentMode = 2
-)
-
-// EquatorialCoordinateType for the EquatorialSystem property.
-type EquatorialCoordinateType int
-
-const (
-	EquOther       EquatorialCoordinateType = 0
-	EquTopocentric EquatorialCoordinateType = 1
-	EquJ2000       EquatorialCoordinateType = 2
-	EquJ2050       EquatorialCoordinateType = 3
-	EquB1950       EquatorialCoordinateType = 4
-)
-
-// PierSide for SideOfPier / DestinationSideOfPier.
-type PierSide int
-
-const (
-	PierUnknown PierSide = -1
-	PierEast    PierSide = 0
-	PierWest    PierSide = 1
-)
-
-// DriveRate for TrackingRate / TrackingRates.
-type DriveRate int
-
-const (
-	DriveSidereal DriveRate = 0
-	DriveLunar    DriveRate = 1
-	DriveSolar    DriveRate = 2
-	DriveKing     DriveRate = 3
-)
-
-// TelescopeAxis for MoveAxis / AxisRates / CanMoveAxis.
-type TelescopeAxis int
-
-const (
-	AxisPrimary   TelescopeAxis = 0
-	AxisSecondary TelescopeAxis = 1
-	AxisTertiary  TelescopeAxis = 2
-)
-
-// AxisRate is one allowed rate range for MoveAxis (degrees/second).
-type AxisRate struct {
-	Minimum float64 `json:"Minimum"`
-	Maximum float64 `json:"Maximum"`
-}
+import "sync"
 
 // Telescope is the ASCOM Telescope interface (ITelescopeV3/V4). The *Async slew
 // methods, FindHome, Park, Unpark and PulseGuide are initiators; Slewing /
@@ -112,9 +59,11 @@ type Telescope interface {
 	Slewing() bool
 	SlewSettleTime() int
 	SetSlewSettleTime(int) error
-	TargetDeclination() float64
+	// Target getters error with InvalidOperation until a target has been set
+	// (the ASCOM read-before-set rule).
+	TargetDeclination() (float64, error)
 	SetTargetDeclination(float64) error
-	TargetRightAscension() float64
+	TargetRightAscension() (float64, error)
 	SetTargetRightAscension(float64) error
 	Tracking() bool
 	SetTracking(bool) error
@@ -146,8 +95,21 @@ type Telescope interface {
 }
 
 // BaseTelescope provides not-implemented / incapable defaults for Telescope.
+//
+// The target properties are fully implemented: values are stored, and the
+// getters return InvalidOperation until the matching setter has been called
+// (the ITelescopeV4 read-before-set rule). The HTTP layer also propagates
+// SlewToCoordinates[Async]/SyncToCoordinates coordinates into the targets, so
+// a driver that embeds BaseTelescope gets compliant target behavior without
+// writing any of it. Override the four target members together to take over.
 type BaseTelescope struct {
 	BaseDevice
+
+	targetMu     sync.Mutex
+	targetRA     float64
+	targetDec    float64
+	targetRASet  bool
+	targetDecSet bool
 }
 
 func (b *BaseTelescope) AlignmentMode() AlignmentMode               { return AlignGermanPolar }
@@ -200,17 +162,47 @@ func (b *BaseTelescope) SetSiteLongitude(float64) error             { return Err
 func (b *BaseTelescope) Slewing() bool                              { return false }
 func (b *BaseTelescope) SlewSettleTime() int                        { return 0 }
 func (b *BaseTelescope) SetSlewSettleTime(int) error                { return ErrNotImplemented }
-func (b *BaseTelescope) TargetDeclination() float64                 { return 0 }
-func (b *BaseTelescope) SetTargetDeclination(float64) error         { return ErrNotImplemented }
-func (b *BaseTelescope) TargetRightAscension() float64              { return 0 }
-func (b *BaseTelescope) SetTargetRightAscension(float64) error      { return ErrNotImplemented }
-func (b *BaseTelescope) Tracking() bool                             { return false }
-func (b *BaseTelescope) SetTracking(bool) error                     { return ErrNotImplemented }
-func (b *BaseTelescope) TrackingRate() DriveRate                    { return DriveSidereal }
-func (b *BaseTelescope) SetTrackingRate(DriveRate) error            { return ErrNotImplemented }
-func (b *BaseTelescope) TrackingRates() []DriveRate                 { return []DriveRate{DriveSidereal} }
-func (b *BaseTelescope) UTCDate() string                            { return "" }
-func (b *BaseTelescope) SetUTCDate(string) error                    { return ErrNotImplemented }
+func (b *BaseTelescope) TargetDeclination() (float64, error) {
+	b.targetMu.Lock()
+	defer b.targetMu.Unlock()
+	if !b.targetDecSet {
+		return 0, invalidOpErr("TargetDeclination has not been set")
+	}
+	return b.targetDec, nil
+}
+func (b *BaseTelescope) SetTargetDeclination(v float64) error {
+	if err := invalidRange("TargetDeclination", v, -90, 90); err != nil {
+		return err
+	}
+	b.targetMu.Lock()
+	defer b.targetMu.Unlock()
+	b.targetDec, b.targetDecSet = v, true
+	return nil
+}
+func (b *BaseTelescope) TargetRightAscension() (float64, error) {
+	b.targetMu.Lock()
+	defer b.targetMu.Unlock()
+	if !b.targetRASet {
+		return 0, invalidOpErr("TargetRightAscension has not been set")
+	}
+	return b.targetRA, nil
+}
+func (b *BaseTelescope) SetTargetRightAscension(v float64) error {
+	if v < 0 || v >= 24 {
+		return invalidValuef("TargetRightAscension %g is outside the valid range 0 to 23.999", v)
+	}
+	b.targetMu.Lock()
+	defer b.targetMu.Unlock()
+	b.targetRA, b.targetRASet = v, true
+	return nil
+}
+func (b *BaseTelescope) Tracking() bool                  { return false }
+func (b *BaseTelescope) SetTracking(bool) error          { return ErrNotImplemented }
+func (b *BaseTelescope) TrackingRate() DriveRate         { return DriveSidereal }
+func (b *BaseTelescope) SetTrackingRate(DriveRate) error { return ErrNotImplemented }
+func (b *BaseTelescope) TrackingRates() []DriveRate      { return []DriveRate{DriveSidereal} }
+func (b *BaseTelescope) UTCDate() string                 { return "" }
+func (b *BaseTelescope) SetUTCDate(string) error         { return ErrNotImplemented }
 
 func (b *BaseTelescope) AbortSlew() error                   { return ErrNotImplemented }
 func (b *BaseTelescope) AxisRates(TelescopeAxis) []AxisRate { return []AxisRate{} }

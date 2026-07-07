@@ -3,7 +3,7 @@ package client
 import (
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // Switch is a client for an ASCOM Switch device. Most members are indexed by a

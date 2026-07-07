@@ -4,13 +4,13 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // FilterWheel is a simulated ASCOM FilterWheel. A move takes a short, fixed time
 // during which Position reads -1 (the ASCOM "in motion" sentinel).
 type FilterWheel struct {
-	alpacadev.BaseFilterWheel
+	server.BaseFilterWheel
 
 	mu        sync.Mutex
 	names     []string
@@ -72,9 +72,6 @@ func (fw *FilterWheel) Position() int {
 func (fw *FilterWheel) SetPosition(slot int) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
-	if slot < 0 || slot >= len(fw.names) {
-		return alpacadev.ErrInvalidValue
-	}
 	fw.position = slot
 	fw.moveUntil = time.Now().Add(300 * time.Millisecond)
 	return nil

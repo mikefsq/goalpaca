@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"encoding/json"
@@ -31,29 +31,44 @@ type methodResponse struct {
 	ErrorMessage        string `json:"ErrorMessage"`
 }
 
-// params holds request parameters (merged query + form), keyed lowercase for
-// the case-insensitive lookup Alpaca requires.
+// params holds request parameters (merged query + form), indexed two ways: by
+// original casing (vals) and by lowercase (lower). ClientID/ClientTransactionID
+// are always resolved case-insensitively — real Alpaca clients and ConformU's
+// own GET-parameter checks both require it — regardless of strict. Only PUT's
+// device-specific parameters honor strict; see Config.StrictParamCasing.
 type params struct {
 	vals                map[string]string
+	lower               map[string]string
+	strict              bool
 	clientID            uint32
 	clientTransactionID uint32
 }
 
-func parseParams(r *http.Request) params {
-	p := params{vals: map[string]string{}}
+// parseParams reads the merged query + form parameters from r. strict selects
+// exact-case matching for PUT's device-specific parameters (Config.
+// StrictParamCasing); it never applies to GET parameters or to
+// ClientID/ClientTransactionID, both of which ConformU itself expects to be
+// recognized regardless of casing.
+func parseParams(r *http.Request, strict bool) params {
+	p := params{
+		vals:   map[string]string{},
+		lower:  map[string]string{},
+		strict: strict && r.Method == http.MethodPut,
+	}
 	// ParseForm merges URL query and (for PUT) the x-www-form-urlencoded body.
 	_ = r.ParseForm()
 	for k, v := range r.Form {
 		if len(v) > 0 {
-			p.vals[strings.ToLower(k)] = v[0]
+			p.vals[k] = v[0]
+			p.lower[strings.ToLower(k)] = v[0]
 		}
 	}
-	if v, ok := p.vals["clientid"]; ok {
+	if v, ok := p.lower["clientid"]; ok {
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
 			p.clientID = uint32(n)
 		}
 	}
-	if v, ok := p.vals["clienttransactionid"]; ok {
+	if v, ok := p.lower["clienttransactionid"]; ok {
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
 			p.clientTransactionID = uint32(n)
 		}
@@ -61,8 +76,16 @@ func parseParams(r *http.Request) params {
 	return p
 }
 
+// get looks up a parameter by its canonical ASCOM name (e.g. "DeclinationRate").
+// In the default mode, and always for GET, the match is case-insensitive; for
+// a PUT request with Config.StrictParamCasing set, name must match the wire
+// parameter exactly.
 func (p params) get(name string) (string, bool) {
-	v, ok := p.vals[strings.ToLower(name)]
+	if p.strict {
+		v, ok := p.vals[name]
+		return v, ok
+	}
+	v, ok := p.lower[strings.ToLower(name)]
 	return v, ok
 }
 
@@ -122,6 +145,17 @@ func (p params) reqBool(name string) (bool, error) {
 		return false, nil
 	}
 	return false, badParam(name, v)
+}
+
+// reqString reads a required string parameter. A missing value is a
+// protocol-level bad request (HTTP 400), matching reqInt/reqFloat/reqBool;
+// an empty-but-present value is left for the driver/caller to validate.
+func (p params) reqString(name string) (string, error) {
+	v, ok := p.get(name)
+	if !ok {
+		return "", missingParam(name)
+	}
+	return v, nil
 }
 
 // writeBadRequest renders a protocol-level bad request as HTTP 400 text/plain

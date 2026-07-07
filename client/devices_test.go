@@ -6,13 +6,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // serve starts the real goalpaca server (over httptest) hosting dev at number 0.
-func serve(t *testing.T, dt alpaca.DeviceType, dev alpaca.Device) *httptest.Server {
+func serve(t *testing.T, dt server.DeviceType, dev server.Device) *httptest.Server {
 	t.Helper()
-	srv := alpaca.New(alpaca.Config{Discovery: alpaca.DiscoveryConfig{Mode: alpaca.DiscoveryOff}})
+	srv := server.New(server.Config{Discovery: server.DiscoveryConfig{Mode: server.DiscoveryOff}})
 	if err := srv.Register(dt, 0, dev); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -23,11 +23,12 @@ func serve(t *testing.T, dt alpaca.DeviceType, dev alpaca.Device) *httptest.Serv
 
 // fakeSwitch exercises the Id-indexed Switch members.
 type fakeSwitch struct {
-	alpaca.BaseSwitch
+	server.BaseSwitch
 	vals map[int]float64
 }
 
 func (s *fakeSwitch) MaxSwitch() int                         { return 2 }
+func (s *fakeSwitch) MaxSwitchValue(int) (float64, error)    { return 10, nil }
 func (s *fakeSwitch) CanWrite(int) (bool, error)             { return true, nil }
 func (s *fakeSwitch) GetSwitchName(id int) (string, error)   { return fmt.Sprintf("SW%d", id), nil }
 func (s *fakeSwitch) GetSwitchValue(id int) (float64, error) { return s.vals[id], nil }
@@ -37,7 +38,7 @@ func TestSwitchClient(t *testing.T) {
 	dev := &fakeSwitch{vals: map[int]float64{}}
 	dev.DevName = "Switches"
 	dev.IfaceVer = 3
-	ts := serve(t, alpaca.SwitchType, dev)
+	ts := serve(t, server.SwitchType, dev)
 	sc := NewSwitch(ts.URL, 0)
 	if err := sc.SetConnected(true); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -57,38 +58,38 @@ func TestSwitchClient(t *testing.T) {
 }
 
 // fakeTelescope exercises enum decoding and parameterized getters.
-type fakeTelescope struct{ alpaca.BaseTelescope }
+type fakeTelescope struct{ server.BaseTelescope }
 
-func (f *fakeTelescope) CanMoveAxis(axis alpaca.TelescopeAxis) bool {
-	return axis == alpaca.AxisPrimary
+func (f *fakeTelescope) CanMoveAxis(axis server.TelescopeAxis) bool {
+	return axis == server.AxisPrimary
 }
-func (f *fakeTelescope) TrackingRates() []alpaca.DriveRate {
-	return []alpaca.DriveRate{alpaca.DriveSidereal, alpaca.DriveLunar}
+func (f *fakeTelescope) TrackingRates() []server.DriveRate {
+	return []server.DriveRate{server.DriveSidereal, server.DriveLunar}
 }
 
 func TestTelescopeClient(t *testing.T) {
 	dev := &fakeTelescope{}
 	dev.DevName = "Mount"
 	dev.IfaceVer = 4
-	ts := serve(t, alpaca.TelescopeType, dev)
+	ts := serve(t, server.TelescopeType, dev)
 	tc := NewTelescope(ts.URL, 0)
 	if err := tc.SetConnected(true); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if ok, err := tc.CanMoveAxis(alpaca.AxisPrimary); err != nil || !ok {
+	if ok, err := tc.CanMoveAxis(server.AxisPrimary); err != nil || !ok {
 		t.Fatalf("CanMoveAxis(primary) = %v, %v; want true", ok, err)
 	}
-	if ok, err := tc.CanMoveAxis(alpaca.AxisSecondary); err != nil || ok {
+	if ok, err := tc.CanMoveAxis(server.AxisSecondary); err != nil || ok {
 		t.Fatalf("CanMoveAxis(secondary) = %v, %v; want false", ok, err)
 	}
 	rates, err := tc.TrackingRates()
-	if err != nil || len(rates) != 2 || rates[1] != alpaca.DriveLunar {
+	if err != nil || len(rates) != 2 || rates[1] != server.DriveLunar {
 		t.Fatalf("TrackingRates() = %v, %v; want [sidereal lunar]", rates, err)
 	}
-	if am, err := tc.AlignmentMode(); err != nil || am != alpaca.AlignGermanPolar {
+	if am, err := tc.AlignmentMode(); err != nil || am != server.AlignGermanPolar {
 		t.Fatalf("AlignmentMode() = %v, %v; want GermanPolar", am, err)
 	}
-	if err := tc.SetTracking(true); !errors.Is(err, alpaca.ErrNotImplemented) {
+	if err := tc.SetTracking(true); !errors.Is(err, server.ErrNotImplemented) {
 		t.Fatalf("SetTracking(): want NotImplemented, got %v", err)
 	}
 }

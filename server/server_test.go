@@ -1,6 +1,7 @@
-package alpacadev
+package server
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeCamera is a minimal in-memory Camera for exercising the HTTP adapter
@@ -32,8 +34,11 @@ func newFakeCamera() *fakeCamera {
 
 func (c *fakeCamera) CameraXSize() int       { return 100 }
 func (c *fakeCamera) CameraYSize() int       { return 50 }
+func (c *fakeCamera) NumX() int              { return 100 }
+func (c *fakeCamera) NumY() int              { return 50 }
 func (c *fakeCamera) CanAbortExposure() bool { return true }
 func (c *fakeCamera) Gain() int              { return c.gain }
+func (c *fakeCamera) GainMax() int           { return 300 }
 func (c *fakeCamera) SetGain(g int) error    { c.gain = g; return nil }
 func (c *fakeCamera) StartExposure(float64, bool) error {
 	c.started = true
@@ -204,5 +209,86 @@ func TestManagement(t *testing.T) {
 	dev := arr[0].(map[string]any)
 	if dev["DeviceType"] != "camera" || dev["UniqueID"] != "fake-guid-1" {
 		t.Errorf("device entry = %#v", dev)
+	}
+}
+
+// TestRegisterTypeCheck verifies Register rejects a device that does not
+// implement the typed interface for its DeviceType.
+func TestRegisterTypeCheck(t *testing.T) {
+	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	cam := newFakeCamera()
+	if err := s.Register(TelescopeType, 0, cam); err == nil {
+		t.Error("Register(TelescopeType, camera) succeeded; want an interface-mismatch error")
+	}
+	if err := s.Register(CameraType, 0, cam); err != nil {
+		t.Errorf("Register(CameraType, camera): %v", err)
+	}
+}
+
+// TestManagementGETOnly verifies the management endpoints reject non-GET
+// methods (the spec defines them as GET-only).
+func TestManagementGETOnly(t *testing.T) {
+	s := newTestServer(t)
+	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/management/apiversions", nil)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /management/apiversions = %d; want 405", method, rec.Code)
+		}
+	}
+	// GET still works.
+	req := httptest.NewRequest(http.MethodGet, "/management/apiversions", nil)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /management/apiversions = %d; want 200", rec.Code)
+	}
+}
+
+// TestPortZero verifies Run with AlpacaPort 0 records the OS-assigned port and
+// Port() exposes it.
+func TestPortZero(t *testing.T) {
+	s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, Hosts: []string{"127.0.0.1"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Port() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	port := s.Port()
+	if port == 0 {
+		t.Fatal("Port() still 0 after Run bound")
+	}
+	if s.advertisedPort() != port {
+		t.Errorf("advertisedPort() = %d, want bound port %d", s.advertisedPort(), port)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run: %v", err)
+	}
+}
+
+// TestOpTryBegin verifies TryBegin's atomic check-and-start semantics.
+func TestOpTryBegin(t *testing.T) {
+	var op Op
+	if !op.TryBegin() {
+		t.Fatal("TryBegin on idle op = false; want true")
+	}
+	if op.TryBegin() {
+		t.Fatal("TryBegin on busy op = true; want false")
+	}
+	op.Complete()
+	if !op.TryBegin() {
+		t.Fatal("TryBegin after Complete = false; want true")
+	}
+	op.Fail(ErrInvalidOperation)
+	if !op.TryBegin() {
+		t.Fatal("TryBegin after Fail = false; want true")
+	}
+	if op.Err() != nil {
+		t.Error("TryBegin did not clear the previous error")
 	}
 }

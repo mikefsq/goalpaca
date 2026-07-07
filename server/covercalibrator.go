@@ -1,28 +1,4 @@
-package alpacadev
-
-// CoverStatus mirrors the ASCOM CoverStatus enum.
-type CoverStatus int
-
-const (
-	CoverNotPresent CoverStatus = 0
-	CoverClosed     CoverStatus = 1
-	CoverMoving     CoverStatus = 2
-	CoverOpen       CoverStatus = 3
-	CoverUnknown    CoverStatus = 4
-	CoverError      CoverStatus = 5
-)
-
-// CalibratorStatus mirrors the ASCOM CalibratorStatus enum.
-type CalibratorStatus int
-
-const (
-	CalibratorNotPresent CalibratorStatus = 0
-	CalibratorOff        CalibratorStatus = 1
-	CalibratorNotReady   CalibratorStatus = 2
-	CalibratorReady      CalibratorStatus = 3
-	CalibratorUnknown    CalibratorStatus = 4
-	CalibratorError      CalibratorStatus = 5
-)
+package server
 
 // CoverCalibrator is the ASCOM CoverCalibrator interface (ICoverCalibratorV1/V2).
 // CalibratorOn / OpenCover / CloseCover are initiators; CalibratorChanging /
@@ -79,21 +55,43 @@ func coverCalibratorGet(member string, cc CoverCalibrator, _ params) (any, bool,
 	return nil, false, nil
 }
 
+// coverCalibratorPut dispatches CoverCalibrator PUT members. A device that
+// reports its calibrator or cover as NotPresent must return NotImplemented
+// from the corresponding methods (ICoverCalibratorV1), and CalibratorOn's
+// brightness is bounded by MaxBrightness.
 func coverCalibratorPut(member string, cc CoverCalibrator, p params) (bool, error) {
 	switch member {
 	case "calibratoroff":
+		if cc.CalibratorState() == CalibratorNotPresent {
+			return true, notImplErr("CalibratorOff")
+		}
 		return true, cc.CalibratorOff()
 	case "calibratoron":
 		n, err := p.reqInt("Brightness")
 		if err != nil {
 			return true, err
 		}
+		if cc.CalibratorState() == CalibratorNotPresent {
+			return true, notImplErr("CalibratorOn")
+		}
+		if max := cc.MaxBrightness(); n < 0 || n > max {
+			return true, invalidValuef("Brightness %d is outside the valid range 0 to %d", n, max)
+		}
 		return true, cc.CalibratorOn(n)
 	case "closecover":
+		if cc.CoverState() == CoverNotPresent {
+			return true, notImplErr("CloseCover")
+		}
 		return true, cc.CloseCover()
 	case "haltcover":
+		if cc.CoverState() == CoverNotPresent {
+			return true, notImplErr("HaltCover")
+		}
 		return true, cc.HaltCover()
 	case "opencover":
+		if cc.CoverState() == CoverNotPresent {
+			return true, notImplErr("OpenCover")
+		}
 		return true, cc.OpenCover()
 	}
 	return false, nil

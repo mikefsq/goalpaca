@@ -5,15 +5,17 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Camera is a simulated monochrome CMOS ASCOM Camera. Exposure progress,
 // readiness and cooling are computed from the clock on read (no background
-// goroutine); writes are validated against the documented limits. The image it
-// returns is a synthetic horizontal gradient sized to the current subframe.
+// goroutine). The server library validates the bin/subframe/gain/offset writes;
+// the simulator only clamps the exposure duration and cooler set point to its
+// own hardware limits. The image it returns is a synthetic horizontal gradient
+// sized to the current subframe.
 type Camera struct {
-	alpacadev.BaseCamera
+	server.BaseCamera
 
 	mu sync.Mutex
 
@@ -42,6 +44,7 @@ type Camera struct {
 	lastStartTime string
 	hasExposure   bool // an exposure has been taken (StartExposure called)
 	exposing      bool // an exposure is currently active (not stopped/aborted)
+	expW, expH    int  // subframe geometry captured at StartExposure
 }
 
 // CameraOption configures a simulated Camera.
@@ -81,8 +84,8 @@ func (c *Camera) MaxADU() int               { return 65535 }
 func (c *Camera) ElectronsPerADU() float64  { return 0.25 }
 func (c *Camera) FullWellCapacity() float64 { return 51000 }
 func (c *Camera) SensorName() string        { return "SimSensor" }
-func (c *Camera) SensorType() alpacadev.SensorType {
-	return alpacadev.SensorMonochrome
+func (c *Camera) SensorType() server.SensorType {
+	return server.SensorMonochrome
 }
 
 // BayerOffsetX/Y use the BaseCamera default (NotImplemented): monochrome sensor.
@@ -102,9 +105,6 @@ func (c *Camera) BinY() int {
 }
 
 func (c *Camera) SetBinX(v int) error {
-	if v < 1 || v > c.MaxBinX() {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.binX = v
@@ -112,9 +112,6 @@ func (c *Camera) SetBinX(v int) error {
 }
 
 func (c *Camera) SetBinY(v int) error {
-	if v < 1 || v > c.MaxBinY() {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.binY = v
@@ -140,9 +137,6 @@ func (c *Camera) StartY() int {
 }
 
 func (c *Camera) SetStartX(v int) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.startX = v
@@ -150,9 +144,6 @@ func (c *Camera) SetStartX(v int) error {
 }
 
 func (c *Camera) SetStartY(v int) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.startY = v
@@ -172,9 +163,6 @@ func (c *Camera) NumY() int {
 }
 
 func (c *Camera) SetNumX(v int) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.numX = v
@@ -182,9 +170,6 @@ func (c *Camera) SetNumX(v int) error {
 }
 
 func (c *Camera) SetNumY(v int) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.numY = v
@@ -193,38 +178,48 @@ func (c *Camera) SetNumY(v int) error {
 
 // --- Exposure ---
 
+// StartExposure begins a simulated exposure. The server library has already
+// validated the subframe geometry against the current binning and sensor
+// size; this only enforces the camera's own advertised duration range.
 func (c *Camera) StartExposure(duration float64, light bool) error {
 	if duration < c.ExposureMin() || duration > c.ExposureMax() {
-		return alpacadev.ErrInvalidValue
+		return server.ErrInvalidValue
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// The requested subframe (in binned pixels) must fit on the sensor.
-	if c.numX <= 0 || c.numY <= 0 ||
-		(c.startX+c.numX)*c.binX > c.CameraXSize() ||
-		(c.startY+c.numY)*c.binY > c.CameraYSize() {
-		return alpacadev.ErrInvalidValue
-	}
 	now := time.Now()
 	c.startTime = now
 	c.readyAt = now.Add(time.Duration(duration * float64(time.Second)))
 	c.lastDuration = duration
-	c.lastStartTime = now.Format("2006-01-02T15:04:05")
+	c.lastStartTime = now.UTC().Format("2006-01-02T15:04:05") // FITS-style, UTC per ICameraV4
 	c.hasExposure = true
 	c.exposing = true
+	c.expW, c.expH = c.numX, c.numY // the frame is the geometry exposed, not a later ROI edit
 	return nil
 }
 
+// StopExposure ends an in-progress exposure early, KEEPING the data gathered
+// so far: the image becomes ready immediately and the recorded duration is
+// the actual exposure time. A no-op when no exposure is in progress.
 func (c *Camera) StopExposure() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if now := time.Now(); c.exposing && now.Before(c.readyAt) {
+		c.readyAt = now
+		c.lastDuration = now.Sub(c.startTime).Seconds()
+	}
 	c.exposing = false
 	return nil
 }
 
+// AbortExposure cancels an in-progress exposure, DISCARDING it: no image may
+// be offered afterwards (ICameraV4). A no-op when no exposure is in progress.
 func (c *Camera) AbortExposure() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.exposing && time.Now().Before(c.readyAt) {
+		c.hasExposure = false
+	}
 	c.exposing = false
 	return nil
 }
@@ -238,13 +233,13 @@ func (c *Camera) ImageReady() bool {
 	return c.hasExposure && !time.Now().Before(c.readyAt)
 }
 
-func (c *Camera) CameraState() alpacadev.CameraState {
+func (c *Camera) CameraState() server.CameraState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.exposing && time.Now().Before(c.readyAt) {
-		return alpacadev.CameraExposing
+		return server.CameraExposing
 	}
-	return alpacadev.CameraIdle
+	return server.CameraIdle
 }
 
 func (c *Camera) PercentCompleted() int {
@@ -276,7 +271,7 @@ func (c *Camera) LastExposureDuration() (float64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.hasExposure {
-		return 0, alpacadev.ErrValueNotSet
+		return 0, server.ErrValueNotSet
 	}
 	return c.lastDuration, nil
 }
@@ -285,7 +280,7 @@ func (c *Camera) LastExposureStartTime() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.hasExposure {
-		return "", alpacadev.ErrValueNotSet
+		return "", server.ErrValueNotSet
 	}
 	return c.lastStartTime, nil
 }
@@ -299,14 +294,16 @@ func (c *Camera) HasShutter() bool { return true }
 
 // ImageFrame builds a synthetic monochrome frame (a horizontal 16-bit gradient)
 // sized to the current subframe. It is available only once an exposure is ready.
-func (c *Camera) ImageFrame() (alpacadev.ImageFrame, error) {
+func (c *Camera) ImageFrame() (server.ImageFrame, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.hasExposure || time.Now().Before(c.readyAt) {
-		return alpacadev.ImageFrame{}, alpacadev.ErrValueNotSet
+		// ICameraV4: ImageArray while ImageReady is false is an
+		// InvalidOperationException (0x40B), not ValueNotSet.
+		return server.ImageFrame{}, server.ErrInvalidOperation
 	}
-	w := c.numX
-	h := c.numY
+	w := c.expW
+	h := c.expH
 	buf := make([]byte, w*h*2)
 	for x := 0; x < w; x++ {
 		var v uint16
@@ -318,12 +315,12 @@ func (c *Camera) ImageFrame() (alpacadev.ImageFrame, error) {
 			binary.LittleEndian.PutUint16(buf[off:], v)
 		}
 	}
-	return alpacadev.ImageFrame{
+	return server.ImageFrame{
 		Rank:                    2,
 		Width:                   w,
 		Height:                  h,
-		ElementType:             alpacadev.ImgInt32,
-		TransmissionElementType: alpacadev.ImgUInt16,
+		ElementType:             server.ImgInt32,
+		TransmissionElementType: server.ImgUInt16,
 		Pixels:                  buf,
 	}, nil
 }
@@ -337,9 +334,6 @@ func (c *Camera) Gain() int {
 }
 
 func (c *Camera) SetGain(v int) error {
-	if v < c.GainMin() || v > c.GainMax() {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gain = v
@@ -358,9 +352,6 @@ func (c *Camera) Offset() int {
 }
 
 func (c *Camera) SetOffset(v int) error {
-	if v < c.OffsetMin() || v > c.OffsetMax() {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.offset = v
@@ -374,14 +365,9 @@ func (c *Camera) OffsetMax() int { return 100 }
 
 // --- Readout modes ---
 
-func (c *Camera) ReadoutMode() int { return 0 }
-func (c *Camera) SetReadoutMode(v int) error {
-	if v != 0 {
-		return alpacadev.ErrInvalidValue
-	}
-	return nil
-}
-func (c *Camera) ReadoutModes() []string { return []string{"Default"} }
+func (c *Camera) ReadoutMode() int         { return 0 }
+func (c *Camera) SetReadoutMode(int) error { return nil }
+func (c *Camera) ReadoutModes() []string   { return []string{"Default"} }
 
 // FastReadout/SetFastReadout/CanFastReadout use the BaseCamera defaults
 // (NotImplemented / false): this camera has no fast-readout mode.
@@ -447,8 +433,10 @@ func (c *Camera) SetCCDTemperature() (float64, error) {
 }
 
 func (c *Camera) SetSetCCDTemperature(v float64) error {
-	if v < -273.15 || v > 100 {
-		return alpacadev.ErrInvalidValue
+	// Coolers can only cool: the set point tops out a little above ambient.
+	// (ConformU flags any driver that accepts a set point of 100 °C.)
+	if v < -273.15 || v > 30 {
+		return server.ErrInvalidValue
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -11,10 +11,11 @@ Module path: `github.com/mikefsq/goalpaca` · pure Go (standard library only).
 
 goalpaca is a **Go-native** Alpaca implementation. Its design goals:
 
-- **Track the ASCOM standard.** The OpenAPI specs vendored in `specs/` are the
-  source of truth; the conformance harness is how the implementation stays in
-  step as the standard evolves (update the spec → re-run conformance). goalpaca
-  follows the ASCOM committee's decisions rather than inventing protocol.
+- **Track the ASCOM standard.** The upstream OpenAPI specs are vendored in
+  `specs/` as the reference the implementation is written against, and the
+  conformance harness (a hand-port of ConformU's checks) keeps it honest as
+  the standard evolves. goalpaca follows the ASCOM committee's decisions
+  rather than inventing protocol.
 - **Interoperate at the wire level.** The only contract with the rest of the
   ecosystem is the Alpaca protocol itself (HTTP/JSON REST + UDP discovery). A
   goalpaca server is discoverable and usable by any conformant client (NINA,
@@ -29,14 +30,15 @@ goalpaca is a **Go-native** Alpaca implementation. Its design goals:
 
 | Path | Purpose |
 |------|---------|
-| `server/` | Host one or more hardware devices as a standalone Alpaca server. Authors implement a typed per-type interface (`Camera`, `Focuser`, …) plus an optional `Hardware` lifecycle by embedding a `Base<Type>`; the library handles the wire protocol, discovery, Platform 7 async, image transport, connection + busy write-gating, and the management API. Package name: `alpacadev`. See [docs/server_spec.md](docs/server_spec.md). |
-| `client/` | Typed client for talking to Alpaca devices over HTTP — one client per device type, plus dual-stack (IPv4 + IPv6) discovery. See [docs/client_spec.md](docs/client_spec.md). |
+| `alpaca/` | The wire vocabulary both sides share: device-type names, per-type enums, the error model, and the ImageBytes codec. The server re-exports it all under its original names, so it is mostly an implementation detail — import it directly only when writing code that is neither server nor client. |
+| `server/` | Host one or more hardware devices as a standalone Alpaca server. Authors implement a typed per-type interface (`Camera`, `Focuser`, …) plus an optional `Hardware` lifecycle by embedding a `Base<Type>`; the library handles the wire protocol, discovery, Platform 7 async, image transport, connection + busy write-gating, the management API, and **ASCOM protocol compliance** — parameter-range validation, capability gating, parked/target/image-ready rules — so implementing the interface yields a conformant device. Drivers write only hardware-specific behavior. |
+| `client/` | Typed client for talking to Alpaca devices over HTTP — one client per device type, plus dual-stack (IPv4 + IPv6) discovery. |
 | `sim/` | Simulator implementations of all ten device types (modeled on the official ASCOM simulators) for testing with no hardware. |
-| `conformance/` | ConformU-derived conformance checks that drive the client against a device (a sim or a real server). See [docs/conformU_testing.md](docs/conformU_testing.md). |
+| `conformance/` | ConformU-derived conformance checks that drive the client against a device (a sim or a real server). |
 | `cmd/alpacasim/` | Serves all ten simulated devices behind one Alpaca port — a ConformU target and a dev server. |
 | `cmd/alpacadiscover/` | CLI that runs discovery and prints the servers found and each one's configured devices. |
-| `cmd/discover_proxy/` | Optional, non-standard discovery proxy: answers Alpaca UDP discovery on behalf of drivers that register via unicast heartbeat. See [docs/discovery_proxy_spec.md](docs/discovery_proxy_spec.md). |
-| `specs/` | Vendored upstream ASCOM Alpaca OpenAPI specs (MIT, © ASCOM Initiative) — the conformance reference. |
+| `cmd/discover_proxy/` | Optional, non-standard discovery proxy: answers Alpaca UDP discovery on behalf of drivers that register via unicast heartbeat. |
+| `specs/` | Vendored upstream ASCOM Alpaca OpenAPI specs (MIT, © ASCOM Initiative) — the reference the implementation is written against. |
 
 ## Quick start
 
@@ -47,6 +49,9 @@ go run ./cmd/alpacasim                 # :11111, discovery=direct
 #   -discovery    direct (default, no proxy) | off
 #   -ipv6         also answer IPv6 multicast discovery
 #   -quiet        disable per-request logging
+#   -strict-param-casing
+#                 ConformU protocol-mode only; rejects differently-cased
+#                 parameter names (differs from the Swagger API spec)
 
 # Discover them from another terminal.
 go run ./cmd/alpacadiscover            # -timeout sets the listen window
@@ -69,15 +74,24 @@ go test -race ./...
 ```
 
 The conformance layer ports ConformU's checks and runs them through the client
-against the simulators; the real ConformU binary against `alpacasim` is the
-external arbiter. See [docs/conformU_testing.md](docs/conformU_testing.md).
+against the simulators; the real
+[ConformU](https://github.com/ASCOMInitiative/ConformU) binary against
+`alpacasim` is the external arbiter. All ten device types pass ConformU v4.4.0
+with zero issues — and because the compliance rules are enforced by the
+`server` library rather than the simulators, that guarantee extends to any
+driver built on it.
 
 ## Documentation
 
-- [docs/server_spec.md](docs/server_spec.md) — server library reference
-- [docs/client_spec.md](docs/client_spec.md) — client library reference
-- [docs/conformU_testing.md](docs/conformU_testing.md) — conformance testing strategy
-- [docs/discovery_proxy_spec.md](docs/discovery_proxy_spec.md) — discovery proxy spec
+API documentation lives in the godoc:
+
+- [server](https://pkg.go.dev/github.com/mikefsq/goalpaca/server) — device-hosting server library
+- [client](https://pkg.go.dev/github.com/mikefsq/goalpaca/client) — typed Alpaca client + discovery
+- [sim](https://pkg.go.dev/github.com/mikefsq/goalpaca/sim) — the ten device simulators
+- [conformance](https://pkg.go.dev/github.com/mikefsq/goalpaca/conformance) — conformance checks
+
+Protocol references: the vendored OpenAPI specs in [`specs/`](specs/) and the
+[ASCOM Alpaca API Reference](https://ascom-standards.org/AlpacaDeveloper/ASCOMAlpacaAPIReference.html).
 
 ## License
 

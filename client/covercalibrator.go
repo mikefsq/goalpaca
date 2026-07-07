@@ -3,7 +3,7 @@ package client
 import (
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // CoverCalibrator is a client for an ASCOM CoverCalibrator device.

@@ -1,6 +1,6 @@
 //go:build linux
 
-package alpacadev
+package server
 
 import "syscall"
 

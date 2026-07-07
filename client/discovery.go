@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,7 +33,21 @@ type DiscoveredServer struct {
 //
 // IPv6 discovery only finds servers that have joined the multicast group, i.e.
 // servers configured with DiscoveryConfig.EnableIPv6.
+//
+// Results are deduplicated by dialable address, so one physical server
+// reachable over both IPv4 and IPv6 appears twice (two distinct addresses).
+// Merge by the management API's UniqueID when a UI needs one entry per server.
+//
+// Discover blocks for the full timeout (the listen window). Use
+// DiscoverContext to make it cancellable.
 func Discover(timeout time.Duration) ([]DiscoveredServer, error) {
+	return DiscoverContext(context.Background(), timeout)
+}
+
+// DiscoverContext is Discover with a caller context: cancelling ctx ends the
+// listen window early (e.g. the user closed the discovery dialog) and returns
+// ctx.Err(). The timeout still bounds the window when ctx stays live.
+func DiscoverContext(ctx context.Context, timeout time.Duration) ([]DiscoveredServer, error) {
 	type leg struct {
 		servers []DiscoveredServer
 		err     error
@@ -52,11 +66,11 @@ func Discover(timeout time.Duration) ([]DiscoveredServer, error) {
 		for _, b := range interfaceBroadcasts() {
 			dests = append(dests, &net.UDPAddr{IP: b, Port: discoveryPort})
 		}
-		s, err := discover(timeout, dests)
+		s, err := discover(ctx, timeout, dests)
 		ch <- leg{s, err}
 	}()
 	go func() {
-		s, err := discoverIPv6(timeout)
+		s, err := discoverIPv6(ctx, timeout)
 		ch <- leg{s, err}
 	}()
 
@@ -80,22 +94,34 @@ func Discover(timeout time.Duration) ([]DiscoveredServer, error) {
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if ok == 0 {
 		return nil, firstErr
 	}
 	return out, nil
 }
 
+// cancelReads arranges for a ctx cancellation to unblock reads on conn by
+// expiring its read deadline; returns a stop func for the caller to defer.
+func cancelReads(ctx context.Context, conn *net.UDPConn) func() bool {
+	return context.AfterFunc(ctx, func() {
+		_ = conn.SetReadDeadline(time.Now())
+	})
+}
+
 // discover sends the probe over IPv4 to each destination (broadcast addresses)
 // and collects the unicast replies.
-func discover(timeout time.Duration, dests []*net.UDPAddr) ([]DiscoveredServer, error) {
+func discover(ctx context.Context, timeout time.Duration, dests []*net.UDPAddr) ([]DiscoveredServer, error) {
 	lc := net.ListenConfig{Control: setBroadcast}
-	pc, err := lc.ListenPacket(context.Background(), "udp4", ":0")
+	pc, err := lc.ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		return nil, err
 	}
 	conn := pc.(*net.UDPConn)
 	defer conn.Close()
+	defer cancelReads(ctx, conn)()
 	for _, d := range dests {
 		_, _ = conn.WriteToUDP([]byte(discoveryProbe), d)
 	}
@@ -106,12 +132,13 @@ func discover(timeout time.Duration, dests []*net.UDPAddr) ([]DiscoveredServer, 
 // multicast-capable interface (the group is link-local scoped, so each send
 // carries the interface zone) and collects the unicast replies. It returns an
 // error only if no IPv6 socket can be opened (no IPv6 stack).
-func discoverIPv6(timeout time.Duration) ([]DiscoveredServer, error) {
+func discoverIPv6(ctx context.Context, timeout time.Duration) ([]DiscoveredServer, error) {
 	pc, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified, Port: 0})
 	if err != nil {
 		return nil, err // no usable IPv6 stack
 	}
 	defer pc.Close()
+	defer cancelReads(ctx, pc)()
 
 	group := net.ParseIP(alpacaV6Group)
 	sent := 0
@@ -138,7 +165,9 @@ func readResponses(conn *net.UDPConn, timeout time.Duration) []DiscoveredServer 
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	seen := map[string]bool{}
 	var out []DiscoveredServer
-	buf := make([]byte, 1024)
+	// 64 KB (max UDP payload): a response larger than the old 1 KB buffer
+	// would be truncated mid-JSON and silently dropped.
+	buf := make([]byte, 64<<10)
 	for {
 		n, from, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -206,17 +235,35 @@ type ConfiguredDevice struct {
 	UniqueID     string `json:"UniqueID"`
 }
 
+// managementHTTP is the client for management-API queries: short timeout (a
+// discovery follow-up should fail fast, not hang on a stalled server).
+var managementHTTP = &http.Client{Timeout: 10 * time.Second}
+
 // ConfiguredDevices queries the server's /management/v1/configureddevices and
 // returns the devices it hosts.
 func (s DiscoveredServer) ConfiguredDevices() ([]ConfiguredDevice, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/management/v1/configureddevices", urlAuthority(s.Address)))
+	return s.ConfiguredDevicesContext(context.Background())
+}
+
+// ConfiguredDevicesContext is ConfiguredDevices with a caller context —
+// discovery UIs cancel the follow-up query along with DiscoverContext.
+func (s DiscoveredServer) ConfiguredDevicesContext(ctx context.Context) ([]ConfiguredDevice, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://%s/management/v1/configureddevices", urlAuthority(s.Address)), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := managementHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, maxEnvelopeBytes)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &RequestError{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 	var env struct {
 		Value []ConfiguredDevice `json:"Value"`

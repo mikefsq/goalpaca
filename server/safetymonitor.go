@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // SafetyMonitor is the ASCOM SafetyMonitor interface (ISafetyMonitorV3).
 type SafetyMonitor interface {

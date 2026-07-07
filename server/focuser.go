@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // Focuser is the ASCOM Focuser interface (IFocuserV3/V4). Move is an initiator;
 // IsMoving is the completion property. Position/StepSize/Temperature return an
@@ -73,6 +73,9 @@ func focuserPut(member string, f Focuser, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
+		if b && !f.TempCompAvailable() {
+			return true, notImplErr("TempComp")
+		}
 		return true, f.SetTempComp(b)
 	case "halt":
 		return true, f.Halt()
@@ -80,6 +83,11 @@ func focuserPut(member string, f Focuser, p params) (bool, error) {
 		n, err := p.reqInt("Position")
 		if err != nil {
 			return true, err
+		}
+		// IFocuserV2 and earlier: Move is an InvalidOperation while temperature
+		// compensation is active. IFocuserV3 (Platform 6.4+) permits it.
+		if f.InterfaceVersion() < 3 && f.TempComp() {
+			return true, invalidOpErr("Move is not valid while temperature compensation is active")
 		}
 		return true, f.Move(n)
 	}

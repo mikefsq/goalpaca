@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // Alpaca protocol-conformance tests, derived from ConformU's
 // AlpacaProtocolTestManager (the device-agnostic "Check Alpaca Protocol" mode).
@@ -170,6 +170,87 @@ func TestProtocolServerTransactionIDMonotonic(t *testing.T) {
 	second := decodeValue(t, rawGet(s, "/api/v1/camera/0/name")).ServerTransactionID
 	if first == 0 || second <= first {
 		t.Errorf("ServerTransactionID not strictly increasing: %d then %d", first, second)
+	}
+}
+
+// newStrictTestServer is newTestServer with Config.StrictParamCasing enabled,
+// plus a telescope for the GET-parameterized-member tests (AxisRates etc.).
+func newStrictTestServer(t *testing.T) *Server {
+	t.Helper()
+	s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "test", StrictParamCasing: true})
+	cam := newFakeCamera()
+	cam.MarkConnected()
+	if err := s.Register(CameraType, 0, cam); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tel := newFakeTelescope()
+	tel.MarkConnected()
+	if err := s.Register(TelescopeType, 0, tel); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	return s
+}
+
+// invertCase flips the case of every letter, mirroring ConformU's
+// AlpacaProtocolTestManager.InvertCasing "Bad casing" probe.
+func invertCase(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z':
+			b[i] = c - 'a' + 'A'
+		case c >= 'A' && c <= 'Z':
+			b[i] = c - 'A' + 'a'
+		}
+	}
+	return string(b)
+}
+
+// Config.StrictParamCasing switches PUT parameter-name matching from the
+// spec's default case-insensitive lookup to exact matching, so a badly-cased
+// required parameter is treated as missing (400) — what ConformU's "Check
+// Alpaca Protocol" mode "Bad casing" tests require for PUT — while the
+// default mode tolerates it (200), per specs/AlpacaDeviceAPI_v1.yaml.
+// ClientID/ClientTransactionID are tolerated in both modes and for both HTTP
+// methods: a badly-cased one is ignored (echoes 0), never rejected. GET
+// parameters (e.g. Telescope's AxisRates) stay case-insensitive even in
+// strict mode — ConformU's own GET-parameter "Inverted casing" tests require
+// a 200, the opposite of its PUT expectation.
+func TestProtocolStrictParamCasing(t *testing.T) {
+	const path = "/api/v1/camera/0/connected"
+
+	lenient := newTestServer(t)
+	if rec := rawReq(lenient, http.MethodPut, path, url.Values{invertCase("Connected"): {"true"}}); rec.Code != http.StatusOK {
+		t.Errorf("lenient mode, bad-cased Connected: status %d, want 200", rec.Code)
+	}
+
+	strict := newStrictTestServer(t)
+	if rec := rawReq(strict, http.MethodPut, path, url.Values{invertCase("Connected"): {"true"}}); rec.Code != http.StatusBadRequest {
+		t.Errorf("strict mode, bad-cased Connected: status %d, want 400", rec.Code)
+	}
+	if rec := rawReq(strict, http.MethodPut, path, url.Values{"Connected": {"true"}}); rec.Code != http.StatusOK {
+		t.Errorf("strict mode, correctly-cased Connected: status %d, want 200", rec.Code)
+	}
+
+	rec := rawReq(strict, http.MethodPut, path,
+		url.Values{"Connected": {"true"}, invertCase("ClientTransactionID"): {"42"}})
+	if rec.Code != http.StatusOK {
+		t.Errorf("strict mode, bad-cased ClientTransactionID: status %d, want 200", rec.Code)
+	}
+	if vr := decodeValue(t, rec); vr.ClientTransactionID != 42 {
+		t.Errorf("strict mode, bad-cased ClientTransactionID: echoed %d, want 42 (still recognized)", vr.ClientTransactionID)
+	}
+
+	rec = rawReq(strict, http.MethodPut, path,
+		url.Values{"Connected": {"true"}, "ClientTransactionID": {"42"}})
+	if vr := decodeValue(t, rec); vr.ClientTransactionID != 42 {
+		t.Errorf("strict mode, correctly-cased ClientTransactionID: echoed %d, want 42", vr.ClientTransactionID)
+	}
+
+	// GET parameters are exempt from strict mode: a bad-cased "Axis" must
+	// still resolve (200), not 400.
+	if rec := rawGet(strict, "/api/v1/telescope/0/axisrates?"+invertCase("Axis")+"=0"); rec.Code != http.StatusOK {
+		t.Errorf("strict mode, GET bad-cased Axis: status %d, want 200", rec.Code)
 	}
 }
 

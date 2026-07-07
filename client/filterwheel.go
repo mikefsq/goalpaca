@@ -3,7 +3,7 @@ package client
 import (
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // FilterWheel is a client for an ASCOM FilterWheel device.

@@ -11,8 +11,15 @@ import (
 	"testing"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
+
+// SettleTimeout bounds every asynchronous-completion wait in the checks
+// (slews, exposures, wheel moves, connects). The default suits the fast
+// in-process simulators; raise it substantially (minutes) when running the
+// checks against real hardware, whose moves take as long as they take —
+// ConformU's own settle timeouts are configurable for the same reason.
+var SettleTimeout = 6 * time.Second
 
 // CommonDevice is the ICommon surface shared by every typed client (satisfied by
 // *client.Camera, *client.Rotator, … via the embedded client.Device).
@@ -28,7 +35,7 @@ type CommonDevice interface {
 	DriverVersion() (string, error)
 	InterfaceVersion() (int, error)
 	SupportedActions() ([]string, error)
-	DeviceState() ([]alpacadev.StateValue, error)
+	DeviceState() ([]server.StateValue, error)
 }
 
 // CheckCommon verifies the common ASCOM members: identity (readable without a
@@ -107,7 +114,7 @@ func CheckCommon(t *testing.T, d CommonDevice) {
 // completes or the timeout elapses.
 func waitNotConnecting(t *testing.T, d CommonDevice) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		connecting, err := d.Connecting()
 		if err != nil {

@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,16 +31,49 @@ const (
 
 // DiscoveryConfig configures discovery participation.
 type DiscoveryConfig struct {
-	Mode       DiscoveryMode
+	Mode       DiscoveryMode // participation mode (default DiscoveryRegister)
 	ServerAddr string        // host:32227, for DiscoveryRegister
 	Interval   time.Duration // heartbeat cadence (≈ discovery-server TTL/3)
 	EnableIPv6 bool          // also answer IPv6 multicast probes (DiscoveryDirect)
+}
+
+// HTTPTimeouts bounds the HTTP server's per-connection I/O. The zero value of
+// each field selects the default; a negative value disables that limit.
+type HTTPTimeouts struct {
+	// ReadHeader bounds reading a request's headers (slowloris guard).
+	// Default 10s.
+	ReadHeader time.Duration
+	// Read bounds reading a whole request. Alpaca requests are tiny (query
+	// params / small form bodies), so the default is a tight 30s.
+	Read time.Duration
+	// Write bounds writing a whole response. An ImageBytes response can be
+	// >100 MB and each in-flight image write pins a frame-sized buffer, so an
+	// overall cap matters; the 5m default passes a full frame at under
+	// 500 KB/s. Raise it (or set -1) for slower links.
+	Write time.Duration
+	// Idle bounds how long a keep-alive connection may sit idle. Default 2m.
+	Idle time.Duration
+}
+
+// value resolves one field: zero → default, negative → no limit.
+func timeoutValue(v, def time.Duration) time.Duration {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return 0 // net/http: zero means no timeout
+	}
+	return v
 }
 
 // Config is the server configuration.
 type Config struct {
 	AlpacaPort int // device HTTP REST port (e.g. 11111)
 	Discovery  DiscoveryConfig
+
+	// Timeouts bounds per-connection HTTP I/O; the zero value selects
+	// defaults suited to LAN Alpaca traffic (see HTTPTimeouts).
+	Timeouts HTTPTimeouts
 
 	// Hosts restricts the local addresses the HTTP server binds to, one listener
 	// per address (e.g. []string{"127.0.0.1", "10.0.1.20"}). Empty (the default)
@@ -54,10 +88,33 @@ type Config struct {
 	ManufacturerVersion string
 	Location            string
 
-	// Logger, if non-nil, logs one line per HTTP request (remote addr, method,
-	// URI, status, duration; PUT form body included). Handy for debugging; leave
-	// nil for silence.
+	// Logger, if non-nil, receives one line per HTTP request (remote addr,
+	// method, URI, status, duration; PUT form body included) plus server
+	// events (bind failures, discovery errors, hardware Open/Close failures).
+	// If nil, request logging is off and events go to the standard logger.
+	// Set a log.New(io.Discard, "", 0) Logger for complete silence.
 	Logger *log.Logger
+
+	// StrictParamCasing, if true, matches request parameter names exactly
+	// instead of case-insensitively. The default (false) follows the spec —
+	// "Parameter names are not case sensitive, so clients and drivers should
+	// be prepared for parameter names to be supplied and returned with any
+	// casing" (specs/AlpacaDeviceAPI_v1.yaml) — and is what real-world clients
+	// expect. Set true only to satisfy ConformU's "Check Alpaca Protocol" mode,
+	// whose "Bad casing" tests invert a parameter name's casing and expect the
+	// server to treat it as missing (400) rather than tolerate it; that is
+	// stricter than the spec text and will reject real clients that send a
+	// differently-cased parameter name.
+	StrictParamCasing bool
+}
+
+// logf logs a server event: to cfg.Logger when set, else the standard logger.
+func (s *Server) logf(format string, args ...any) {
+	if s.cfg.Logger != nil {
+		s.cfg.Logger.Printf(format, args...)
+		return
+	}
+	log.Printf(format, args...)
 }
 
 type regKey struct {
@@ -82,7 +139,15 @@ type Server struct {
 
 	tx   serverTxCounter
 	http *http.Server
+
+	boundPort atomic.Int32 // actual bound TCP port, set by Run (0 until bound)
 }
+
+// Port returns the actual bound HTTP port once Run has bound its listener(s),
+// or 0 before that. With Config.AlpacaPort 0 (OS-assigned) this is how a
+// caller — and discovery — learns the real port; with multiple Hosts it is
+// the first listener's port.
+func (s *Server) Port() int { return int(s.boundPort.Load()) }
 
 // New creates a Server. Defaults: Discovery.Interval 10s.
 func New(cfg Config) *Server {
@@ -96,21 +161,65 @@ func New(cfg Config) *Server {
 }
 
 // Register adds a device at the given type/number. Numbers are per type and
-// must be unique. Call before Run.
+// must be unique. The device must implement the typed interface matching
+// devType (e.g. Camera for CameraType) — registering a mismatch would
+// otherwise surface only as confusing "unknown member" responses at runtime.
+// Call before Run.
 func (s *Server) Register(devType DeviceType, number int, d Device) error {
 	if d == nil {
-		return errors.New("alpacadev: nil device")
+		return errors.New("goalpaca: nil device")
+	}
+	if !implementsType(devType, d) {
+		return fmt.Errorf("goalpaca: device %T does not implement the %s interface", d, devType)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := regKey{devType, number}
 	if _, exists := s.devices[k]; exists {
-		return fmt.Errorf("alpacadev: %s device %d already registered", devType, number)
+		return fmt.Errorf("goalpaca: %s device %d already registered", devType, number)
 	}
 	rd := &registeredDevice{typ: devType, num: number, dev: d}
 	s.devices[k] = rd
 	s.order = append(s.order, rd)
 	return nil
+}
+
+// implementsType reports whether d satisfies the typed interface for devType.
+// Unknown/custom types carry no static contract beyond Device.
+func implementsType(devType DeviceType, d Device) bool {
+	switch devType {
+	case CameraType:
+		_, ok := d.(Camera)
+		return ok
+	case CoverCalibratorType:
+		_, ok := d.(CoverCalibrator)
+		return ok
+	case DomeType:
+		_, ok := d.(Dome)
+		return ok
+	case FilterWheelType:
+		_, ok := d.(FilterWheel)
+		return ok
+	case FocuserType:
+		_, ok := d.(Focuser)
+		return ok
+	case ObservingConditionsType:
+		_, ok := d.(ObservingConditions)
+		return ok
+	case RotatorType:
+		_, ok := d.(Rotator)
+		return ok
+	case SafetyMonitorType:
+		_, ok := d.(SafetyMonitor)
+		return ok
+	case SwitchType:
+		_, ok := d.(Switch)
+		return ok
+	case TelescopeType:
+		_, ok := d.(Telescope)
+		return ok
+	}
+	return true
 }
 
 func (s *Server) lookup(devType DeviceType, number int) (Device, bool) {
@@ -134,12 +243,28 @@ func (s *Server) Run(ctx context.Context) error {
 	// listener per address when Config.Hosts restricts it.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.ServeHTTP)
-	s.http = &http.Server{Handler: mux}
+	s.http = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: timeoutValue(s.cfg.Timeouts.ReadHeader, 10*time.Second),
+		ReadTimeout:       timeoutValue(s.cfg.Timeouts.Read, 30*time.Second),
+		WriteTimeout:      timeoutValue(s.cfg.Timeouts.Write, 5*time.Minute),
+		IdleTimeout:       timeoutValue(s.cfg.Timeouts.Idle, 2*time.Minute),
+	}
 
 	httpErr := make(chan error, 1)
 	serve := func(ln net.Listener) {
 		if err := s.http.Serve(ln); err != nil && err != http.ErrServerClosed {
-			httpErr <- err
+			select {
+			case httpErr <- err: // first fatal error wins
+			default: // another listener already reported; don't block forever
+			}
+		}
+	}
+	recordPort := func(ln net.Listener) {
+		if s.boundPort.Load() == 0 {
+			if ta, ok := ln.Addr().(*net.TCPAddr); ok {
+				s.boundPort.Store(int32(ta.Port))
+			}
 		}
 	}
 	if len(s.cfg.Hosts) == 0 {
@@ -148,6 +273,7 @@ func (s *Server) Run(ctx context.Context) error {
 			s.closeHardware(context.Background(), opened)
 			return err
 		}
+		recordPort(ln)
 		go serve(ln)
 	} else {
 		bound := 0
@@ -155,15 +281,16 @@ func (s *Server) Run(ctx context.Context) error {
 			addr := net.JoinHostPort(h, strconv.Itoa(s.cfg.AlpacaPort))
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
-				fmt.Printf("alpacadev: listen %s failed: %v\n", addr, err)
+				s.logf("goalpaca: listen %s failed: %v", addr, err)
 				continue
 			}
 			bound++
+			recordPort(ln)
 			go serve(ln)
 		}
 		if bound == 0 {
 			s.closeHardware(context.Background(), opened)
-			return fmt.Errorf("alpacadev: could not bind any of %v on port %d", s.cfg.Hosts, s.cfg.AlpacaPort)
+			return fmt.Errorf("goalpaca: could not bind any of %v on port %d", s.cfg.Hosts, s.cfg.AlpacaPort)
 		}
 	}
 
@@ -201,7 +328,7 @@ func (s *Server) openHardware(ctx context.Context) []Hardware {
 				// Surface but continue; a device that fails Open will report
 				// NotConnected/errors per member. Supervised restart is the
 				// recovery model (spec §8).
-				fmt.Printf("alpacadev: %s %d Open failed: %v\n", rd.typ, rd.num, err)
+				s.logf("goalpaca: %s %d Open failed: %v", rd.typ, rd.num, err)
 				continue
 			}
 			opened = append(opened, hw)
@@ -213,7 +340,7 @@ func (s *Server) openHardware(ctx context.Context) []Hardware {
 func (s *Server) closeHardware(ctx context.Context, opened []Hardware) {
 	for i := len(opened) - 1; i >= 0; i-- {
 		if err := opened[i].Close(ctx); err != nil {
-			fmt.Printf("alpacadev: hardware Close failed: %v\n", err)
+			s.logf("goalpaca: hardware Close failed: %v", err)
 		}
 	}
 }

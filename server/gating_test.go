@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"net/url"
@@ -137,5 +137,121 @@ func TestBusyGatingTelescopeMotion(t *testing.T) {
 	// MoveAxis (an initiator) stays gated while busy.
 	if mr := put(t, s, "/api/v1/telescope/0/moveaxis", url.Values{"Axis": {"0"}, "Rate": {"1.5"}}); mr.ErrorNumber != ErrNumInvalidOperation {
 		t.Errorf("busy moveaxis ErrorNumber = %#x, want InvalidOperation %#x", mr.ErrorNumber, ErrNumInvalidOperation)
+	}
+}
+
+// fakeCoverCal is a minimal Busyable CoverCalibrator for the interrupt gating test.
+type fakeCoverCal struct {
+	BaseCoverCalibrator
+	busy    bool
+	halted  bool
+	calOff  bool
+	covOpen bool
+}
+
+func (c *fakeCoverCal) Busy() bool                        { return c.busy }
+func (c *fakeCoverCal) CoverState() CoverStatus           { return CoverClosed }
+func (c *fakeCoverCal) CalibratorState() CalibratorStatus { return CalibratorOff }
+func (c *fakeCoverCal) HaltCover() error {
+	c.halted = true
+	return nil
+}
+func (c *fakeCoverCal) CalibratorOff() error {
+	c.calOff = true
+	return nil
+}
+func (c *fakeCoverCal) OpenCover() error {
+	c.covOpen = true
+	return nil
+}
+
+func newFakeCoverCal() *fakeCoverCal {
+	cc := &fakeCoverCal{}
+	cc.ID = "fake-covercal-1"
+	cc.DevName = "FakeCoverCal"
+	cc.IfaceVer = 2
+	return cc
+}
+
+// TestBusyGatingCoverCalibrator verifies HaltCover and CalibratorOff bypass the
+// Busy gate — they are the interrupts that end cover motion / a calibrator
+// ramp — while OpenCover (an initiator) stays gated with InvalidOperation.
+func TestBusyGatingCoverCalibrator(t *testing.T) {
+	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	cc := newFakeCoverCal()
+	cc.MarkConnected()
+	cc.busy = true
+	if err := s.Register(CoverCalibratorType, 0, cc); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if mr := put(t, s, "/api/v1/covercalibrator/0/haltcover", url.Values{}); mr.ErrorNumber != 0 {
+		t.Errorf("busy haltcover ErrorNumber = %#x, want success", mr.ErrorNumber)
+	}
+	if !cc.halted {
+		t.Error("busy haltcover did not reach the device")
+	}
+	if mr := put(t, s, "/api/v1/covercalibrator/0/calibratoroff", url.Values{}); mr.ErrorNumber != 0 {
+		t.Errorf("busy calibratoroff ErrorNumber = %#x, want success", mr.ErrorNumber)
+	}
+	if !cc.calOff {
+		t.Error("busy calibratoroff did not reach the device")
+	}
+
+	// OpenCover (an initiator) stays gated while busy.
+	if mr := put(t, s, "/api/v1/covercalibrator/0/opencover", url.Values{}); mr.ErrorNumber != ErrNumInvalidOperation {
+		t.Errorf("busy opencover ErrorNumber = %#x, want InvalidOperation %#x", mr.ErrorNumber, ErrNumInvalidOperation)
+	}
+	if cc.covOpen {
+		t.Error("busy opencover reached the device; the gate should have rejected it")
+	}
+}
+
+// fakeAsyncSwitch is a minimal Busyable Switch for the async-interrupt gating test.
+type fakeAsyncSwitch struct {
+	BaseSwitch
+	busy      bool
+	cancelled bool
+}
+
+func (f *fakeAsyncSwitch) Busy() bool                 { return f.busy }
+func (f *fakeAsyncSwitch) MaxSwitch() int             { return 1 }
+func (f *fakeAsyncSwitch) CanAsync(int) (bool, error) { return true, nil }
+func (f *fakeAsyncSwitch) CancelAsync(int) error {
+	f.cancelled = true
+	return nil
+}
+func (f *fakeAsyncSwitch) SetAsync(int, bool) error { return nil }
+
+func newFakeSwitch() *fakeAsyncSwitch {
+	sw := &fakeAsyncSwitch{}
+	sw.ID = "fake-switch-1"
+	sw.DevName = "FakeSwitch"
+	sw.IfaceVer = 3
+	return sw
+}
+
+// TestBusyGatingSwitchAsync verifies CancelAsync bypasses the Busy gate — it is
+// ISwitchV3's interrupt for an in-flight async state change — while SetAsync
+// (an initiator) stays gated with InvalidOperation.
+func TestBusyGatingSwitchAsync(t *testing.T) {
+	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	sw := newFakeSwitch()
+	sw.MarkConnected()
+	sw.busy = true
+	if err := s.Register(SwitchType, 0, sw); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if mr := put(t, s, "/api/v1/switch/0/cancelasync", url.Values{"Id": {"0"}}); mr.ErrorNumber != 0 {
+		t.Errorf("busy cancelasync ErrorNumber = %#x, want success", mr.ErrorNumber)
+	}
+	if !sw.cancelled {
+		t.Error("busy cancelasync did not reach the device")
+	}
+
+	// SetAsync (an initiator) stays gated while busy.
+	if mr := put(t, s, "/api/v1/switch/0/setasync", url.Values{"Id": {"0"}, "State": {"true"}}); mr.ErrorNumber != ErrNumInvalidOperation {
+		t.Errorf("busy setasync ErrorNumber = %#x, want InvalidOperation %#x", mr.ErrorNumber, ErrNumInvalidOperation)
 	}
 }

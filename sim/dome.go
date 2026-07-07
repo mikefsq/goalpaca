@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Dome is a simulated ASCOM Dome. Azimuth converges on its target along the
@@ -13,7 +13,7 @@ import (
 // rate computed from the clock (no background goroutine). The shutter runs a
 // timed open/close transition. Behaviour mirrors ASCOM.Alpaca.Simulators.
 type Dome struct {
-	alpacadev.BaseDome
+	server.BaseDome
 
 	mu   sync.Mutex
 	rate float64 // degrees per second (azimuth and altitude)
@@ -31,8 +31,8 @@ type Dome struct {
 	altMoving bool
 
 	// shutter state machine
-	shutterState  alpacadev.ShutterState
-	shutterTarget alpacadev.ShutterState
+	shutterState  server.ShutterState
+	shutterTarget server.ShutterState
 	shutterTime   time.Time
 
 	atHome bool
@@ -49,7 +49,7 @@ func WithDomeRate(degPerSec float64) DomeOption {
 
 // NewDome creates a simulated Dome with the shutter closed at azimuth 0°.
 func NewDome(opts ...DomeOption) *Dome {
-	d := &Dome{rate: 5.0, shutterState: alpacadev.ShutterClosed, shutterTarget: alpacadev.ShutterClosed}
+	d := &Dome{rate: 5.0, shutterState: server.ShutterClosed, shutterTarget: server.ShutterClosed}
 	d.ID = "goalpaca-sim-dome-1"
 	d.DevName = "Alpaca Dome Simulator"
 	d.Desc = "goalpaca simulated dome"
@@ -98,7 +98,7 @@ func (d *Dome) currentAltitudeLocked() float64 {
 
 // currentShutterLocked returns the present shutter state, settling a timed
 // transition once it completes. Caller holds d.mu.
-func (d *Dome) currentShutterLocked() alpacadev.ShutterState {
+func (d *Dome) currentShutterLocked() server.ShutterState {
 	if d.shutterState == d.shutterTarget {
 		return d.shutterState
 	}
@@ -161,7 +161,7 @@ func (d *Dome) AtPark() bool {
 	return d.atPark && !d.azMoving
 }
 
-func (d *Dome) ShutterStatus() (alpacadev.ShutterState, error) {
+func (d *Dome) ShutterStatus() (server.ShutterState, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.currentShutterLocked(), nil
@@ -172,24 +172,19 @@ func (d *Dome) Slewing() bool {
 	defer d.mu.Unlock()
 	d.currentAzimuthLocked()  // settle
 	d.currentAltitudeLocked() // settle
-	return d.azMoving || d.altMoving
+	// IDomeV3: Slewing must be true while any part of the dome is moving,
+	// including the shutter, not just azimuth/altitude.
+	shutterMoving := d.currentShutterLocked() != d.shutterTarget
+	return d.azMoving || d.altMoving || shutterMoving
 }
 
 func (d *Dome) Slaved() bool { return false }
 
-func (d *Dome) SetSlaved(v bool) error {
-	if v {
-		return alpacadev.ErrNotImplemented
-	}
-	return nil
-}
+func (d *Dome) SetSlaved(bool) error { return nil }
 
 // --- initiators ---
 
 func (d *Dome) SlewToAzimuth(azimuth float64) error {
-	if azimuth < 0 || azimuth >= 360 {
-		return alpacadev.ErrInvalidValue
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.beginAzimuthLocked(azimuth)
@@ -199,9 +194,6 @@ func (d *Dome) SlewToAzimuth(azimuth float64) error {
 }
 
 func (d *Dome) SlewToAltitude(altitude float64) error {
-	if altitude < 0 || altitude > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.beginAltitudeLocked(altitude)
@@ -209,9 +201,6 @@ func (d *Dome) SlewToAltitude(altitude float64) error {
 }
 
 func (d *Dome) SyncToAzimuth(azimuth float64) error {
-	if azimuth < 0 || azimuth >= 360 {
-		return alpacadev.ErrInvalidValue
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.azStart = wrap360(azimuth)
@@ -224,8 +213,8 @@ func (d *Dome) OpenShutter() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.currentShutterLocked()
-	d.shutterState = alpacadev.ShutterOpening
-	d.shutterTarget = alpacadev.ShutterOpen
+	d.shutterState = server.ShutterOpening
+	d.shutterTarget = server.ShutterOpen
 	d.shutterTime = time.Now()
 	return nil
 }
@@ -234,8 +223,8 @@ func (d *Dome) CloseShutter() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.currentShutterLocked()
-	d.shutterState = alpacadev.ShutterClosing
-	d.shutterTarget = alpacadev.ShutterClosed
+	d.shutterState = server.ShutterClosing
+	d.shutterTarget = server.ShutterClosed
 	d.shutterTime = time.Now()
 	return nil
 }
@@ -256,8 +245,8 @@ func (d *Dome) Park() error {
 	d.atPark = true
 	d.atHome = false
 	d.currentShutterLocked()
-	d.shutterState = alpacadev.ShutterClosing
-	d.shutterTarget = alpacadev.ShutterClosed
+	d.shutterState = server.ShutterClosing
+	d.shutterTarget = server.ShutterClosed
 	d.shutterTime = time.Now()
 	return nil
 }

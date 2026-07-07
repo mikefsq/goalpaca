@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"context"
@@ -11,12 +11,16 @@ import (
 // background loop so a panic in one device does not crash the process (and with
 // it the other devices sharing it). A normal return from fn ends supervision
 // (treated as graceful shutdown, e.g. on ctx cancel).
+//
+// Panics are reported through the standard logger (log.Printf) — deliberately
+// independent of any Config.Logger, so a supervised crash is always loud;
+// redirect it with log.SetOutput if needed.
 func Supervise(ctx context.Context, name string, fn func()) {
 	for ctx.Err() == nil {
 		returned := func() (returned bool) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("alpacadev: %s panicked: %v; restarting", name, r)
+					log.Printf("goalpaca: %s panicked: %v; restarting", name, r)
 				}
 			}()
 			fn()

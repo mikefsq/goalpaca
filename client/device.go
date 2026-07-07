@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // Common Device (ICommon) members shared by every device type.

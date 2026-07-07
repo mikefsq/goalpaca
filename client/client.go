@@ -20,10 +20,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 const defaultTimeout = 30 * time.Second
+
+// maxEnvelopeBytes caps how much of a JSON-envelope response the client will
+// read (Value payloads here are scalars, strings, and short lists). A buggy or
+// hostile server can't stream gigabytes into memory. Image bodies use
+// maxImageBytes instead.
+const maxEnvelopeBytes = 8 << 20
+
+// maxImageBytes caps an imagearray body: the binary ImageBytes form of a
+// large frame is >100 MB and its JSON text form several times that.
+const maxImageBytes = 2 << 30
 
 // response is the Alpaca JSON envelope as seen by the client. Value is captured
 // raw so typed getters decode it into the concrete Go type.
@@ -44,6 +54,7 @@ type RequestError struct {
 	Message string
 }
 
+// Error implements the error interface.
 func (e *RequestError) Error() string {
 	return fmt.Sprintf("alpaca request failed: HTTP %d: %s", e.Status, e.Message)
 }
@@ -54,12 +65,18 @@ type Option func(*Device)
 // WithClientID sets the ClientID sent on every request (default: random 1–65535).
 func WithClientID(id uint32) Option { return func(d *Device) { d.clientID = id } }
 
-// WithHTTPClient supplies a custom *http.Client (transport, timeout, TLS, …).
-func WithHTTPClient(c *http.Client) Option { return func(d *Device) { d.http = c } }
+// WithHTTPClient supplies a custom *http.Client (transport, TLS, proxies, …).
+// It is used for every request, including image downloads — set its Timeout
+// with care (or leave it zero) so large ImageArray transfers aren't cut off.
+// Composes with WithTimeout in either order.
+func WithHTTPClient(c *http.Client) Option { return func(d *Device) { d.customHTTP = c } }
 
-// WithTimeout sets the per-request timeout on the default HTTP client.
+// WithTimeout sets the per-request timeout for JSON-envelope calls
+// (default 30s). It does NOT bound image downloads: an ImageArray body can be
+// >100 MB and outlive any fixed cap on a slow link — use ImageArrayCtx to
+// bound or cancel those. Composes with WithHTTPClient in either order.
 func WithTimeout(t time.Duration) Option {
-	return func(d *Device) { d.http = &http.Client{Timeout: t} }
+	return func(d *Device) { d.timeout = t }
 }
 
 // Device is the common base embedded by every typed client. It carries the
@@ -70,7 +87,13 @@ type Device struct {
 	deviceNumber int
 	clientID     uint32
 	txCounter    uint32
-	http         *http.Client
+
+	// customHTTP/timeout capture the options; initHTTP resolves them into the
+	// two clients actually used (so option order never matters).
+	customHTTP *http.Client
+	timeout    time.Duration
+	http       *http.Client // JSON-envelope calls: overall per-request timeout
+	imageHTTP  *http.Client // image downloads: connection-level limits only
 }
 
 func newDevice(address string, dt alpaca.DeviceType, number int, opts ...Option) Device {
@@ -79,19 +102,57 @@ func newDevice(address string, dt alpaca.DeviceType, number int, opts ...Option)
 		deviceType:   dt,
 		deviceNumber: number,
 		clientID:     rand.Uint32()%65535 + 1,
-		http:         &http.Client{Timeout: defaultTimeout},
 	}
 	for _, o := range opts {
 		o(&d)
 	}
+	d.initHTTP()
 	return d
 }
 
-// Target inspection.
-func (d *Device) BaseURL() string    { return d.baseURL }
-func (d *Device) DeviceType() string { return string(d.deviceType) }
-func (d *Device) DeviceNumber() int  { return d.deviceNumber }
-func (d *Device) ClientID() uint32   { return d.clientID }
+// initHTTP resolves the HTTP options into the envelope and image clients. The
+// default envelope client bounds whole requests at the configured timeout;
+// the default image client has no overall cap (a >100 MB frame on a slow link
+// legitimately outlives any fixed timeout) but inherits the transport's
+// connect/TLS limits plus a response-header bound, so a dead server still
+// fails fast — only an in-progress body transfer is unbounded, and
+// ImageArrayCtx lets the caller bound that.
+func (d *Device) initHTTP() {
+	timeout := d.timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	if d.customHTTP != nil {
+		d.http = d.customHTTP
+		if d.timeout != 0 && d.customHTTP.Timeout != d.timeout {
+			c := *d.customHTTP // shallow copy: same transport, different timeout
+			c.Timeout = d.timeout
+			d.http = &c
+		}
+		d.imageHTTP = d.customHTTP // the user's client governs image transfers as supplied
+		return
+	}
+	tr := http.RoundTripper(http.DefaultTransport)
+	if t, ok := tr.(*http.Transport); ok {
+		t2 := t.Clone()
+		t2.ResponseHeaderTimeout = timeout
+		tr = t2
+	}
+	d.http = &http.Client{Timeout: timeout, Transport: tr}
+	d.imageHTTP = &http.Client{Transport: tr}
+}
+
+// BaseURL returns the server base URL this client targets.
+func (d *Device) BaseURL() string { return d.baseURL }
+
+// DeviceType returns the target's Alpaca device type.
+func (d *Device) DeviceType() alpaca.DeviceType { return d.deviceType }
+
+// DeviceNumber returns the target's per-type device number.
+func (d *Device) DeviceNumber() int { return d.deviceNumber }
+
+// ClientID returns the ClientID sent on every request.
+func (d *Device) ClientID() uint32 { return d.clientID }
 
 func normalizeBaseURL(address string) string {
 	a := strings.TrimSpace(address)
@@ -150,7 +211,7 @@ func (d *Device) call(method, member string, params url.Values, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, maxEnvelopeBytes)
 	if err != nil {
 		return err
 	}
@@ -166,7 +227,13 @@ func (d *Device) call(method, member string, params url.Values, out any) error {
 	if env.ErrorNumber != 0 {
 		return &alpaca.AlpacaError{Number: env.ErrorNumber, Message: env.ErrorMessage}
 	}
-	if out != nil && len(env.Value) > 0 {
+	if out != nil {
+		// A successful GET must carry a Value; decoding a missing/null Value
+		// into Go zero values would silently fabricate data (Connected()
+		// confidently false, Gain() 0) from a noncompliant response.
+		if len(env.Value) == 0 || string(env.Value) == "null" {
+			return fmt.Errorf("alpaca: response for %s has no Value", member)
+		}
 		if err := json.Unmarshal(env.Value, out); err != nil {
 			return fmt.Errorf("alpaca: decode value: %w", err)
 		}
@@ -233,12 +300,12 @@ func (d *Device) getImageBytesCtx(ctx context.Context, member string) (alpaca.Im
 	}
 	req = req.WithContext(ctx)
 	req.Header.Set("Accept", alpaca.ImageBytesMIME)
-	resp, err := d.http.Do(req)
+	resp, err := d.imageHTTP.Do(req)
 	if err != nil {
 		return alpaca.ImageFrame{}, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readCapped(resp.Body, maxImageBytes)
 	if err != nil {
 		return alpaca.ImageFrame{}, err
 	}
@@ -248,12 +315,36 @@ func (d *Device) getImageBytesCtx(ctx context.Context, member string) (alpaca.Im
 	if strings.Contains(resp.Header.Get("Content-Type"), alpaca.ImageBytesMIME) {
 		return alpaca.DecodeImageBytes(body)
 	}
-	// Some servers return a JSON error envelope instead of ImageBytes.
-	var env response
-	if err := json.Unmarshal(body, &env); err == nil && env.ErrorNumber != 0 {
-		return alpaca.ImageFrame{}, &alpaca.AlpacaError{Number: env.ErrorNumber, Message: env.ErrorMessage}
+	// A server is free to ignore the Accept negotiation and answer with the
+	// standard JSON form instead: either an error envelope or the baseline
+	// JSON ImageArray (Type/Rank/Value).
+	var env struct {
+		response
+		Type int `json:"Type"`
+		Rank int `json:"Rank"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil {
+		if env.ErrorNumber != 0 {
+			return alpaca.ImageFrame{}, &alpaca.AlpacaError{Number: env.ErrorNumber, Message: env.ErrorMessage}
+		}
+		if len(env.Value) > 0 && env.Value[0] == '[' {
+			return decodeImageArrayJSON(env.Value, env.Type, env.Rank)
+		}
 	}
 	return alpaca.ImageFrame{}, fmt.Errorf("alpaca: unexpected imagearray content-type %q", resp.Header.Get("Content-Type"))
+}
+
+// readCapped reads r to EOF up to max bytes, erroring (instead of truncating)
+// on an oversized body.
+func readCapped(r io.Reader, max int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("alpaca: response body exceeds %d bytes", max)
+	}
+	return b, nil
 }
 
 // boolParam renders a Go bool as the Alpaca form value.

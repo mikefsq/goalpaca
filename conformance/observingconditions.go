@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // CheckObservingConditions runs the ConformU ObservingConditions conformance
@@ -23,7 +23,7 @@ func CheckObservingConditions(t *testing.T, c *client.ObservingConditions) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.Temperature(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.Temperature(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Temperature() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -188,7 +188,7 @@ func observingconditionsCheckAveragePeriod(t *testing.T, c *client.ObservingCond
 	}
 
 	// A value below the permitted minimum must be rejected.
-	if err := c.SetAveragePeriod(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetAveragePeriod(-1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetAveragePeriod(-1): want InvalidValue, got %v", err)
 	}
 }

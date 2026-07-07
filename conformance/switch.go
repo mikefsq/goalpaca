@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // CheckSwitch runs the ConformU Switch conformance checks against c. Ported from
@@ -23,7 +23,7 @@ func CheckSwitch(t *testing.T, c *client.Switch) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.MaxSwitch(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.MaxSwitch(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("MaxSwitch() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -63,12 +63,12 @@ func CheckSwitch(t *testing.T, c *client.Switch) {
 	}
 
 	// Validation: value above MaxSwitchValue → InvalidValue.
-	if err := c.SetSwitchValue(0, 9999); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSwitchValue(0, 9999); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSwitchValue(0, 9999): want InvalidValue, got %v", err)
 	}
 
 	// Validation: invalid Id → InvalidValue.
-	if _, err := c.GetSwitch(n + 100); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.GetSwitch(n + 100); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("GetSwitch(%d): want InvalidValue, got %v", n+100, err)
 	}
 
@@ -79,7 +79,7 @@ func CheckSwitch(t *testing.T, c *client.Switch) {
 
 	// Below-minimum value rejection: MinSwitchValue is 0, so a negative value is
 	// below range and must be rejected.
-	if err := c.SetSwitchValue(0, -1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSwitchValue(0, -1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSwitchValue(0, -1): want InvalidValue, got %v", err)
 	}
 
@@ -92,10 +92,21 @@ func CheckSwitch(t *testing.T, c *client.Switch) {
 	// Boolean/analog linkage on switch 0.
 	switchdevCheckLinkage(t, c, 0)
 
-	// SetSwitchName is an optional member; the simulator implements it as a no-op
-	// that returns nil.
-	if err := c.SetSwitchName(0, "Test"); err != nil {
-		t.Errorf("SetSwitchName(0, %q): %v", "Test", err)
+	// SetSwitchName round-trip: ConformU sets a name and verifies the readback,
+	// then we restore the original.
+	orig, err := c.GetSwitchName(0)
+	if err != nil {
+		t.Errorf("GetSwitchName(0): %v", err)
+	}
+	if err := c.SetSwitchName(0, "Conformance Test"); err != nil {
+		t.Errorf("SetSwitchName(0, %q): %v", "Conformance Test", err)
+	} else {
+		if name, err := c.GetSwitchName(0); err != nil || name != "Conformance Test" {
+			t.Errorf("GetSwitchName(0) after set = %q, %v; want %q", name, err, "Conformance Test")
+		}
+		if err := c.SetSwitchName(0, orig); err != nil {
+			t.Errorf("SetSwitchName(0, %q) restore: %v", orig, err)
+		}
 	}
 
 	switchdevSkipped(t)
@@ -137,34 +148,34 @@ func switchdevCheckSwitchProperties(t *testing.T, c *client.Switch, id int) {
 func switchdevCheckInvalidID(t *testing.T, c *client.Switch, id int) {
 	t.Helper()
 
-	if _, err := c.CanWrite(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.CanWrite(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("CanWrite(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.GetSwitch(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.GetSwitch(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("GetSwitch(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.GetSwitchName(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.GetSwitchName(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("GetSwitchName(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.GetSwitchDescription(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.GetSwitchDescription(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("GetSwitchDescription(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.GetSwitchValue(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.GetSwitchValue(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("GetSwitchValue(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.MaxSwitchValue(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.MaxSwitchValue(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("MaxSwitchValue(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.MinSwitchValue(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.MinSwitchValue(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("MinSwitchValue(%d): want InvalidValue, got %v", id, err)
 	}
-	if _, err := c.SwitchStep(id); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if _, err := c.SwitchStep(id); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SwitchStep(%d): want InvalidValue, got %v", id, err)
 	}
-	if err := c.SetSwitch(id, true); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSwitch(id, true); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSwitch(%d, true): want InvalidValue, got %v", id, err)
 	}
-	if err := c.SetSwitchValue(id, 0); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSwitchValue(id, 0); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSwitchValue(%d, 0): want InvalidValue, got %v", id, err)
 	}
 }

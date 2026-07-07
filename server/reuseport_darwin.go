@@ -1,6 +1,6 @@
 //go:build darwin
 
-package alpacadev
+package server
 
 import "syscall"
 

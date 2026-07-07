@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // Camera is a client for an ASCOM Camera device.
@@ -17,6 +17,7 @@ func NewCamera(address string, deviceNumber int, opts ...Option) *Camera {
 }
 
 // Sensor geometry & description.
+
 func (c *Camera) CameraXSize() (int, error)          { return c.getInt("cameraxsize") }
 func (c *Camera) CameraYSize() (int, error)          { return c.getInt("cameraysize") }
 func (c *Camera) PixelSizeX() (float64, error)       { return c.getFloat("pixelsizex") }
@@ -33,6 +34,7 @@ func (c *Camera) SensorType() (alpaca.SensorType, error) {
 }
 
 // Binning.
+
 func (c *Camera) BinX() (int, error)              { return c.getInt("binx") }
 func (c *Camera) BinY() (int, error)              { return c.getInt("biny") }
 func (c *Camera) SetBinX(n int) error             { return c.put("binx", url.Values{"BinX": {intParam(n)}}) }
@@ -42,6 +44,7 @@ func (c *Camera) MaxBinY() (int, error)           { return c.getInt("maxbiny") }
 func (c *Camera) CanAsymmetricBin() (bool, error) { return c.getBool("canasymmetricbin") }
 
 // Subframe (ROI), in binned pixels.
+
 func (c *Camera) StartX() (int, error)  { return c.getInt("startx") }
 func (c *Camera) StartY() (int, error)  { return c.getInt("starty") }
 func (c *Camera) SetStartX(n int) error { return c.put("startx", url.Values{"StartX": {intParam(n)}}) }
@@ -52,6 +55,7 @@ func (c *Camera) SetNumX(n int) error   { return c.put("numx", url.Values{"NumX"
 func (c *Camera) SetNumY(n int) error   { return c.put("numy", url.Values{"NumY": {intParam(n)}}) }
 
 // Exposure.
+
 func (c *Camera) StartExposure(duration float64, light bool) error {
 	return c.put("startexposure", url.Values{"Duration": {floatParam(duration)}, "Light": {boolParam(light)}})
 }
@@ -76,8 +80,9 @@ func (c *Camera) SetSubExposureDuration(seconds float64) error {
 	return c.put("subexposureduration", url.Values{"SubExposureDuration": {floatParam(seconds)}})
 }
 
-// ImageArray fetches the latest frame via the binary ImageBytes transport and
-// decodes it into an ImageFrame.
+// ImageArray fetches the latest frame, requesting the binary ImageBytes
+// transport and falling back to the JSON ImageArray form if the server ignores
+// the Accept negotiation, and decodes it into an ImageFrame.
 func (c *Camera) ImageArray() (alpaca.ImageFrame, error) { return c.getImageBytes("imagearray") }
 
 // ImageArrayCtx is ImageArray with a caller context: cancelling ctx aborts the in-flight transfer
@@ -87,6 +92,7 @@ func (c *Camera) ImageArrayCtx(ctx context.Context) (alpaca.ImageFrame, error) {
 }
 
 // Gain / Offset.
+
 func (c *Camera) Gain() (int, error)         { return c.getInt("gain") }
 func (c *Camera) SetGain(n int) error        { return c.put("gain", url.Values{"Gain": {intParam(n)}}) }
 func (c *Camera) GainMin() (int, error)      { return c.getInt("gainmin") }
@@ -99,6 +105,7 @@ func (c *Camera) OffsetMax() (int, error)    { return c.getInt("offsetmax") }
 func (c *Camera) Offsets() ([]string, error) { return c.getStringList("offsets") }
 
 // Readout modes.
+
 func (c *Camera) ReadoutMode() (int, error) { return c.getInt("readoutmode") }
 func (c *Camera) SetReadoutMode(n int) error {
 	return c.put("readoutmode", url.Values{"ReadoutMode": {intParam(n)}})
@@ -111,6 +118,7 @@ func (c *Camera) SetFastReadout(on bool) error {
 func (c *Camera) CanFastReadout() (bool, error) { return c.getBool("canfastreadout") }
 
 // Cooling.
+
 func (c *Camera) CCDTemperature() (float64, error)      { return c.getFloat("ccdtemperature") }
 func (c *Camera) HeatSinkTemperature() (float64, error) { return c.getFloat("heatsinktemperature") }
 func (c *Camera) CoolerOn() (bool, error)               { return c.getBool("cooleron") }
@@ -129,6 +137,7 @@ func (c *Camera) SetSetCCDTemperature(celsius float64) error {
 }
 
 // Guiding.
+
 func (c *Camera) CanPulseGuide() (bool, error)  { return c.getBool("canpulseguide") }
 func (c *Camera) IsPulseGuiding() (bool, error) { return c.getBool("ispulseguiding") }
 func (c *Camera) PulseGuide(direction alpaca.GuideDirection, duration int) error {

@@ -3,14 +3,14 @@ package sim
 import (
 	"sync"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // ObservingConditions is a simulated ASCOM ObservingConditions device. It models
 // a plausible weather station, reporting fixed-but-realistic sensor values and a
 // configurable averaging period.
 type ObservingConditions struct {
-	alpacadev.BaseObservingConditions
+	server.BaseObservingConditions
 
 	mu            sync.Mutex
 	averagePeriod float64 // hours
@@ -43,9 +43,6 @@ func (oc *ObservingConditions) AveragePeriod() float64 {
 }
 
 func (oc *ObservingConditions) SetAveragePeriod(hours float64) error {
-	if hours < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 	oc.averagePeriod = hours
@@ -66,11 +63,15 @@ func (oc *ObservingConditions) WindDirection() (float64, error)  { return 180, n
 func (oc *ObservingConditions) WindGust() (float64, error)       { return 4.0, nil }
 func (oc *ObservingConditions) WindSpeed() (float64, error)      { return 2.5, nil }
 
+// SensorDescription and TimeSinceLastUpdate accept the sensor name as
+// given: the server library has already rejected any name that is not one
+// of the ASCOM-defined ObservingConditions sensors.
+
 func (oc *ObservingConditions) SensorDescription(name string) (string, error) {
 	return "Simulated " + name + " sensor", nil
 }
 
-func (oc *ObservingConditions) TimeSinceLastUpdate(name string) (float64, error) {
+func (oc *ObservingConditions) TimeSinceLastUpdate(string) (float64, error) {
 	return 0.5, nil
 }
 

@@ -1,13 +1,17 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // startFakeResponder runs a loopback UDP discovery responder and returns its port.
@@ -37,7 +41,7 @@ func startFakeResponder(t *testing.T, alpacaPort int) int {
 
 func TestDiscover(t *testing.T) {
 	port := startFakeResponder(t, 11111)
-	servers, err := discover(300*time.Millisecond, []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: port}})
+	servers, err := discover(context.Background(), 300*time.Millisecond, []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: port}})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -86,7 +90,7 @@ func TestConfiguredDevices(t *testing.T) {
 	dev := &fakeFocuser{}
 	dev.DevName = "F"
 	dev.IfaceVer = 4
-	ts := serve(t, alpaca.FocuserType, dev)
+	ts := serve(t, server.FocuserType, dev)
 	s := DiscoveredServer{Address: strings.TrimPrefix(ts.URL, "http://")}
 	devs, err := s.ConfiguredDevices()
 	if err != nil {
@@ -94,5 +98,46 @@ func TestConfiguredDevices(t *testing.T) {
 	}
 	if len(devs) != 1 || devs[0].DeviceType != "focuser" || devs[0].DeviceName != "F" {
 		t.Fatalf("ConfiguredDevices = %+v", devs)
+	}
+}
+
+// TestDiscoverContextCancel verifies DiscoverContext returns promptly with
+// ctx.Err() when cancelled mid-window, instead of blocking out the timeout.
+func TestDiscoverContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := DiscoverContext(ctx, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("DiscoverContext after cancel: err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("DiscoverContext took %v after cancel; want prompt return", elapsed)
+	}
+}
+
+// TestConfiguredDevicesContextCancel verifies a hung management endpoint is
+// abandoned when the context is cancelled.
+func TestConfiguredDevicesContextCancel(t *testing.T) {
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never answer
+	}))
+	defer hung.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := DiscoveredServer{Address: hung.Listener.Addr().String()}.ConfiguredDevicesContext(ctx)
+	if err == nil {
+		t.Fatal("ConfiguredDevicesContext on hung server: want error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %v; want prompt return on cancel", elapsed)
 	}
 }

@@ -8,28 +8,28 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // allSimsServer registers one of every simulator on a server and returns its URL.
 func allSimsServer(t *testing.T) string {
 	t.Helper()
-	srv := alpacadev.New(alpacadev.Config{Discovery: alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff}})
-	reg := func(typ alpacadev.DeviceType, d alpacadev.Device) {
+	srv := server.New(server.Config{Discovery: server.DiscoveryConfig{Mode: server.DiscoveryOff}})
+	reg := func(typ server.DeviceType, d server.Device) {
 		if err := srv.Register(typ, 0, d); err != nil {
 			t.Fatalf("register %s: %v", typ, err)
 		}
 	}
-	reg(alpacadev.CameraType, NewCamera())
-	reg(alpacadev.CoverCalibratorType, NewCoverCalibrator())
-	reg(alpacadev.DomeType, NewDome())
-	reg(alpacadev.FilterWheelType, NewFilterWheel())
-	reg(alpacadev.FocuserType, NewFocuser())
-	reg(alpacadev.ObservingConditionsType, NewObservingConditions())
-	reg(alpacadev.RotatorType, NewRotator())
-	reg(alpacadev.SafetyMonitorType, NewSafetyMonitor())
-	reg(alpacadev.SwitchType, NewSwitch())
-	reg(alpacadev.TelescopeType, NewTelescope())
+	reg(server.CameraType, NewCamera())
+	reg(server.CoverCalibratorType, NewCoverCalibrator())
+	reg(server.DomeType, NewDome())
+	reg(server.FilterWheelType, NewFilterWheel())
+	reg(server.FocuserType, NewFocuser())
+	reg(server.ObservingConditionsType, NewObservingConditions())
+	reg(server.RotatorType, NewRotator())
+	reg(server.SafetyMonitorType, NewSafetyMonitor())
+	reg(server.SwitchType, NewSwitch())
+	reg(server.TelescopeType, NewTelescope())
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts.URL
@@ -87,7 +87,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if err := c.CalibratorOn(50); err != nil {
 			t.Fatalf("CalibratorOn(50): %v", err)
 		}
-		if err := c.CalibratorOn(500); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.CalibratorOn(500); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("CalibratorOn(500): want InvalidValue, got %v", err)
 		}
 	})
@@ -101,7 +101,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if err := c.SlewToAzimuth(90); err != nil {
 			t.Fatalf("SlewToAzimuth(90): %v", err)
 		}
-		if err := c.SlewToAzimuth(400); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SlewToAzimuth(400); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("SlewToAzimuth(400): want InvalidValue, got %v", err)
 		}
 	})
@@ -115,7 +115,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if err := c.SetPosition(2); err != nil {
 			t.Fatalf("SetPosition(2): %v", err)
 		}
-		if err := c.SetPosition(9); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetPosition(9); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("SetPosition(9): want InvalidValue, got %v", err)
 		}
 	})
@@ -140,7 +140,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if temp, err := c.Temperature(); err != nil || math.Abs(temp-15) > 0.001 {
 			t.Fatalf("Temperature = %v, %v", temp, err)
 		}
-		if err := c.SetAveragePeriod(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetAveragePeriod(-1); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("SetAveragePeriod(-1): want InvalidValue, got %v", err)
 		}
 	})
@@ -173,7 +173,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if v, err := c.GetSwitchValue(0); err != nil || v != 50 {
 			t.Fatalf("GetSwitchValue(0) = %v, %v", v, err)
 		}
-		if err := c.SetSwitchValue(0, 500); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetSwitchValue(0, 500); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("SetSwitchValue(0,500): want InvalidValue, got %v", err)
 		}
 	})
@@ -190,7 +190,7 @@ func TestAllSimsSmoke(t *testing.T) {
 		if err := c.SlewToCoordinatesAsync(5, 20); err != nil {
 			t.Fatalf("SlewToCoordinatesAsync(5,20): %v", err)
 		}
-		if err := c.SlewToCoordinatesAsync(30, 0); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SlewToCoordinatesAsync(30, 0); !errors.Is(err, server.ErrInvalidValue) {
 			t.Fatalf("SlewToCoordinatesAsync(30,0): want InvalidValue, got %v", err)
 		}
 	})

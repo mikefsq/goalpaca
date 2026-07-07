@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"fmt"

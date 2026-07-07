@@ -1,4 +1,4 @@
-// Package alpacadev is a library for exposing a single hardware device as a
+// Package server is a library for hosting one or more hardware devices as a
 // standalone ASCOM Alpaca server (HTTP/JSON REST + UDP discovery).
 //
 // A device author implements a typed per-type interface (Camera, Focuser, ...)
@@ -7,33 +7,23 @@
 // liveness. One process owns the hardware for its entire life — the Alpaca
 // Connected flag is a logical per-client session marker, never a hardware
 // open/close (see BaseDevice and the Hardware interface).
-package alpacadev
+//
+// # Protocol compliance
+//
+// The library enforces the device-independent ASCOM rules in its HTTP dispatch
+// layer, before a driver method runs: parameter-range validation (returning
+// InvalidValue), capability-flag gating (a member returns NotImplemented when
+// its CanXxx reports false), telescope parked gating (ParkedException from
+// movement members while AtPark), target read-before-set and image-not-ready
+// gating (InvalidOperation), and the ITelescopeV4 sidereal-only rate-offset,
+// axis-rate, and drive-rate rules. A driver that implements the typed
+// interfaces is therefore Alpaca/ConformU-conformant without writing any of
+// this — it implements only hardware-specific behavior, and may impose its
+// own stricter hardware limits, which run after these gates. All ten device
+// types built on this library pass ASCOM ConformU v4.4.0 with zero issues.
+package server
 
 import "context"
-
-// DeviceType is the ASCOM device-type path segment (lowercased on the wire,
-// e.g. "camera"). The set is fixed by ASCOM; anything outside it is modeled as
-// Switch or Action.
-type DeviceType string
-
-const (
-	CameraType              DeviceType = "camera"
-	CoverCalibratorType     DeviceType = "covercalibrator"
-	DomeType                DeviceType = "dome"
-	FilterWheelType         DeviceType = "filterwheel"
-	FocuserType             DeviceType = "focuser"
-	ObservingConditionsType DeviceType = "observingconditions"
-	RotatorType             DeviceType = "rotator"
-	SafetyMonitorType       DeviceType = "safetymonitor"
-	SwitchType              DeviceType = "switch"
-	TelescopeType           DeviceType = "telescope"
-)
-
-// StateValue is one entry in a DeviceState batch snapshot.
-type StateValue struct {
-	Name  string
-	Value any
-}
 
 // Device is the common interface every Alpaca device implements. Per-type
 // interfaces (Camera, Focuser, ...) embed this and add their ASCOM members.
@@ -62,7 +52,11 @@ type Device interface {
 	CommandBool(cmd string, raw bool) (bool, error)
 	CommandBlind(cmd string, raw bool) error
 
-	// DeviceState batches getters into one response.
+	// DeviceState contributes driver-specific entries to the Platform 7
+	// DeviceState batch. The library builds the standard per-type operational
+	// set from the typed getters; whatever this returns is merged on top
+	// (same-name entries override, new names append). Return nil (the
+	// BaseDevice default) when the standard set suffices.
 	DeviceState() []StateValue
 }
 
@@ -79,9 +73,25 @@ type Hardware interface {
 // server rejects mutating PUTs with InvalidOperation while Busy() is true — i.e.
 // while the device is in a transitory state (a camera exposing/reading, a
 // focuser/rotator/wheel moving). Reads are never gated, and the interrupt
-// members (abortexposure/stopexposure/halt) are exempt so the operation can
-// always be stopped. Busy() must be cheap and non-blocking: it is consulted on
+// members that end an in-flight operation are exempt so it can always be
+// stopped — e.g. abortexposure, stopexposure, abortslew, haltcover,
+// calibratoroff, halt, and the async-cancel members (see interruptMembers for
+// the full set). Busy() must be cheap and non-blocking: it is consulted on
 // every write request.
 type Busyable interface {
 	Busy() bool
+}
+
+// ConnectErrorReporter is an optional interface for the Platform 7 async
+// connect pattern: when a device implements it and an async Connect/Disconnect
+// has FAILED (no longer in flight, error recorded), a GET of the `connecting`
+// completion property reports that error in-band instead of a bare false — so
+// a client polling for completion learns WHY the connect failed rather than
+// seeing a device that silently never became connected.
+//
+// BaseDevice implements it via ConnectOp: drivers that run async connects
+// through ConnectOp().Begin/Complete/Fail get failure surfacing for free; the
+// error clears on the next Begin or Reset.
+type ConnectErrorReporter interface {
+	ConnectError() error
 }

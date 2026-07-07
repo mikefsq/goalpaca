@@ -3,7 +3,7 @@ package client
 import (
 	"net/url"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // Telescope is a client for an ASCOM Telescope (mount) device.
@@ -16,6 +16,7 @@ func NewTelescope(address string, deviceNumber int, opts ...Option) *Telescope {
 }
 
 // Read-only properties.
+
 func (t *Telescope) Altitude() (float64, error)           { return t.getFloat("altitude") }
 func (t *Telescope) ApertureArea() (float64, error)       { return t.getFloat("aperturearea") }
 func (t *Telescope) ApertureDiameter() (float64, error)   { return t.getFloat("aperturediameter") }
@@ -48,6 +49,7 @@ func (t *Telescope) SiderealTime() (float64, error)   { return t.getFloat("sider
 func (t *Telescope) Slewing() (bool, error)           { return t.getBool("slewing") }
 
 // Read/write properties.
+
 func (t *Telescope) DeclinationRate() (float64, error) { return t.getFloat("declinationrate") }
 func (t *Telescope) SetDeclinationRate(v float64) error {
 	return t.put("declinationrate", url.Values{"DeclinationRate": {floatParam(v)}})
@@ -108,6 +110,7 @@ func (t *Telescope) SetUTCDate(iso8601 string) error {
 }
 
 // Enum-typed properties.
+
 func (t *Telescope) AlignmentMode() (alpaca.AlignmentMode, error) {
 	v, err := t.getInt("alignmentmode")
 	return alpaca.AlignmentMode(v), err
@@ -141,6 +144,7 @@ func (t *Telescope) TrackingRates() ([]alpaca.DriveRate, error) {
 }
 
 // Parameterized getters.
+
 func (t *Telescope) AxisRates(axis alpaca.TelescopeAxis) ([]alpaca.AxisRate, error) {
 	var v []alpaca.AxisRate
 	err := t.getInto("axisrates", url.Values{"Axis": {intParam(int(axis))}}, &v)
@@ -161,6 +165,7 @@ func (t *Telescope) DestinationSideOfPier(rightAscension, declination float64) (
 }
 
 // Methods.
+
 func (t *Telescope) AbortSlew() error         { return t.put("abortslew", nil) }
 func (t *Telescope) FindHome() error          { return t.put("findhome", nil) }
 func (t *Telescope) Park() error              { return t.put("park", nil) }

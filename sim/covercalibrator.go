@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // CoverCalibrator is a simulated ASCOM CoverCalibrator. Both a calibrator and a
@@ -14,7 +14,7 @@ import (
 // in-progress and settled states are computed on read. Behaviour mirrors the
 // official ASCOM.Alpaca.Simulators reference device.
 type CoverCalibrator struct {
-	alpacadev.BaseCoverCalibrator
+	server.BaseCoverCalibrator
 
 	mu sync.Mutex
 
@@ -25,14 +25,14 @@ type CoverCalibrator struct {
 	// changing and reports calTransient; once settled it reports calSettled.
 	calUntil     time.Time
 	calChanging  bool
-	calTransient alpacadev.CalibratorStatus
-	calSettled   alpacadev.CalibratorStatus
+	calTransient server.CalibratorStatus
+	calSettled   server.CalibratorStatus
 
 	// Cover transition: while time.Now() < covUntil the cover is moving; once
 	// settled it reports covSettled.
 	covUntil   time.Time
 	covMoving  bool
-	covSettled alpacadev.CoverStatus
+	covSettled server.CoverStatus
 }
 
 // CoverCalibratorOption configures a simulated CoverCalibrator.
@@ -49,8 +49,8 @@ func NewCoverCalibrator(opts ...CoverCalibratorOption) *CoverCalibrator {
 	c := &CoverCalibrator{
 		maxBrightness: 100,
 		brightness:    0,
-		calSettled:    alpacadev.CalibratorOff,
-		covSettled:    alpacadev.CoverClosed,
+		calSettled:    server.CalibratorOff,
+		covSettled:    server.CoverClosed,
 	}
 	c.ID = "goalpaca-sim-covercalibrator-1"
 	c.DevName = "Alpaca CoverCalibrator Simulator"
@@ -92,7 +92,7 @@ func (c *CoverCalibrator) Brightness() int {
 	return c.brightness
 }
 
-func (c *CoverCalibrator) CalibratorState() alpacadev.CalibratorStatus {
+func (c *CoverCalibrator) CalibratorState() server.CalibratorStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.settleCalibratorLocked()
@@ -109,12 +109,12 @@ func (c *CoverCalibrator) CalibratorChanging() bool {
 	return c.calChanging
 }
 
-func (c *CoverCalibrator) CoverState() alpacadev.CoverStatus {
+func (c *CoverCalibrator) CoverState() server.CoverStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.settleCoverLocked()
 	if c.covMoving {
-		return alpacadev.CoverMoving
+		return server.CoverMoving
 	}
 	return c.covSettled
 }
@@ -129,15 +129,12 @@ func (c *CoverCalibrator) CoverMoving() bool {
 // CalibratorOn turns the calibrator on at the given brightness (0 ≤ brightness ≤
 // MaxBrightness) and begins a short transition before it reports ready.
 func (c *CoverCalibrator) CalibratorOn(brightness int) error {
-	if brightness < 0 || brightness > c.maxBrightness {
-		return alpacadev.ErrInvalidValue
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.brightness = brightness
 	c.calChanging = true
-	c.calTransient = alpacadev.CalibratorNotReady
-	c.calSettled = alpacadev.CalibratorReady
+	c.calTransient = server.CalibratorNotReady
+	c.calSettled = server.CalibratorReady
 	c.calUntil = time.Now().Add(400 * time.Millisecond)
 	return nil
 }
@@ -149,8 +146,8 @@ func (c *CoverCalibrator) CalibratorOff() error {
 	defer c.mu.Unlock()
 	c.brightness = 0
 	c.calChanging = true
-	c.calTransient = alpacadev.CalibratorNotReady
-	c.calSettled = alpacadev.CalibratorOff
+	c.calTransient = server.CalibratorNotReady
+	c.calSettled = server.CalibratorOff
 	c.calUntil = time.Now().Add(400 * time.Millisecond)
 	return nil
 }
@@ -161,7 +158,7 @@ func (c *CoverCalibrator) OpenCover() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.covMoving = true
-	c.covSettled = alpacadev.CoverOpen
+	c.covSettled = server.CoverOpen
 	c.covUntil = time.Now().Add(700 * time.Millisecond)
 	return nil
 }
@@ -172,15 +169,21 @@ func (c *CoverCalibrator) CloseCover() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.covMoving = true
-	c.covSettled = alpacadev.CoverClosed
+	c.covSettled = server.CoverClosed
 	c.covUntil = time.Now().Add(700 * time.Millisecond)
 	return nil
 }
 
-// HaltCover stops any cover motion immediately, settling to a stable state.
+// HaltCover stops any cover motion immediately. A cover halted mid-travel is
+// neither open nor closed — it reports Unknown, per ASCOM — while a halt after
+// the move already settled leaves the settled state intact.
 func (c *CoverCalibrator) HaltCover() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.covMoving = false
+	c.settleCoverLocked()
+	if c.covMoving {
+		c.covMoving = false
+		c.covSettled = server.CoverUnknown
+	}
 	return nil
 }

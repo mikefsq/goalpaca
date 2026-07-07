@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 	"github.com/mikefsq/goalpaca/sim"
 )
 
@@ -19,6 +19,9 @@ func main() {
 	discovery := flag.String("discovery", "direct", "discovery mode: direct (self-answer UDP 32227) | off")
 	ipv6 := flag.Bool("ipv6", false, "also answer IPv6 multicast discovery (direct mode)")
 	quiet := flag.Bool("quiet", false, "disable per-request logging")
+	strictParamCasing := flag.Bool("strict-param-casing", false,
+		"match request parameter names exactly instead of case-insensitively; "+
+			"only needed to satisfy ConformU's stricter-than-spec \"Check Alpaca Protocol\" casing tests")
 	flag.Parse()
 
 	reqLog := log.Default()
@@ -26,36 +29,42 @@ func main() {
 		reqLog = nil
 	}
 
-	mode := alpacadev.DiscoveryDirect
-	if *discovery == "off" {
-		mode = alpacadev.DiscoveryOff
+	var mode server.DiscoveryMode
+	switch *discovery {
+	case "direct":
+		mode = server.DiscoveryDirect
+	case "off":
+		mode = server.DiscoveryOff
+	default:
+		log.Fatalf("unknown -discovery mode %q (want direct or off)", *discovery)
 	}
 
-	srv := alpacadev.New(alpacadev.Config{
+	srv := server.New(server.Config{
 		AlpacaPort:          *port,
-		Discovery:           alpacadev.DiscoveryConfig{Mode: mode, EnableIPv6: *ipv6},
+		Discovery:           server.DiscoveryConfig{Mode: mode, EnableIPv6: *ipv6},
 		ServerName:          "goalpaca Alpaca Simulators",
 		Manufacturer:        "goalpaca",
 		ManufacturerVersion: "1.0",
 		Location:            "Simulated",
 		Logger:              reqLog,
+		StrictParamCasing:   *strictParamCasing,
 	})
 
-	reg := func(t alpacadev.DeviceType, d alpacadev.Device) {
+	reg := func(t server.DeviceType, d server.Device) {
 		if err := srv.Register(t, 0, d); err != nil {
 			log.Fatalf("alpacasim: register %s: %v", t, err)
 		}
 	}
-	reg(alpacadev.CameraType, sim.NewCamera())
-	reg(alpacadev.CoverCalibratorType, sim.NewCoverCalibrator())
-	reg(alpacadev.DomeType, sim.NewDome())
-	reg(alpacadev.FilterWheelType, sim.NewFilterWheel())
-	reg(alpacadev.FocuserType, sim.NewFocuser())
-	reg(alpacadev.ObservingConditionsType, sim.NewObservingConditions())
-	reg(alpacadev.RotatorType, sim.NewRotator())
-	reg(alpacadev.SafetyMonitorType, sim.NewSafetyMonitor())
-	reg(alpacadev.SwitchType, sim.NewSwitch())
-	reg(alpacadev.TelescopeType, sim.NewTelescope())
+	reg(server.CameraType, sim.NewCamera())
+	reg(server.CoverCalibratorType, sim.NewCoverCalibrator())
+	reg(server.DomeType, sim.NewDome())
+	reg(server.FilterWheelType, sim.NewFilterWheel())
+	reg(server.FocuserType, sim.NewFocuser())
+	reg(server.ObservingConditionsType, sim.NewObservingConditions())
+	reg(server.RotatorType, sim.NewRotator())
+	reg(server.SafetyMonitorType, sim.NewSafetyMonitor())
+	reg(server.SwitchType, sim.NewSwitch())
+	reg(server.TelescopeType, sim.NewTelescope())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

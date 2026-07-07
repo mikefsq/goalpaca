@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // rotatorPositionTolerance is the arrival tolerance in degrees (ConformU uses a
@@ -22,7 +22,7 @@ func CheckRotator(t *testing.T, r *client.Rotator) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = r.SetConnected(false)
-	if _, err := r.Position(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := r.Position(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Position() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := r.SetConnected(true); err != nil {
@@ -100,7 +100,7 @@ func CheckRotator(t *testing.T, r *client.Rotator) {
 		}
 	}
 	for _, bad := range []float64{405, -405} {
-		if err := r.MoveAbsolute(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := r.MoveAbsolute(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("MoveAbsolute(%g): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -123,7 +123,7 @@ func CheckRotator(t *testing.T, r *client.Rotator) {
 		}
 	}
 	for _, bad := range []float64{375, -375} {
-		if err := r.Move(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := r.Move(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("Move(%g): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -140,7 +140,7 @@ func CheckRotator(t *testing.T, r *client.Rotator) {
 		}
 	}
 	for _, bad := range []float64{405, -405} {
-		if err := r.MoveMechanical(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := r.MoveMechanical(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("MoveMechanical(%g): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -171,7 +171,7 @@ func CheckRotator(t *testing.T, r *client.Rotator) {
 
 func waitRotatorStopped(t *testing.T, r *client.Rotator) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		m, err := r.IsMoving()
 		if err != nil {

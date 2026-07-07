@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // BaseCamera provides not-implemented / zero-value defaults for every Camera
 // member, so a driver embeds it and overrides only what the hardware supports.

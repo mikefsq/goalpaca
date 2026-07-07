@@ -5,15 +5,16 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Telescope is a simulated ASCOM Telescope (German-equatorial mount). RA/Dec
 // converge on their targets at a fixed slew rate computed from the clock (no
 // background goroutine); Slewing, AtPark, AtHome and IsPulseGuiding are derived
-// on read. It models a credible, ConformU-friendly mount with validated writes.
+// on read. It models the mount's motion only — the server library validates
+// writes and applies the parked/target/rate protocol rules before calling in.
 type Telescope struct {
-	alpacadev.BaseTelescope
+	server.BaseTelescope
 
 	mu sync.Mutex
 
@@ -26,6 +27,25 @@ type Telescope struct {
 	slewStart           time.Time
 	slewing             bool
 
+	// MoveAxis model (compute-on-read): a nonzero rate drifts the axis
+	// linearly from startRA/startDec since axisStart. Axis 0 moves RA
+	// (rate deg/s ÷ 15 → hours/s), axis 1 moves Dec; axis 2 (Tertiary) is
+	// unsupported (CanMoveAxis is false) and never drifts the pointing.
+	// Sized to 3 so any TelescopeAxis value indexes safely. Mutually
+	// exclusive with a target slew: MoveAxis freezes and takes over any slew
+	// in progress.
+	axisRates [3]float64 // deg/s, as given by the client
+	axisStart time.Time
+
+	// Rate-offset model (compute-on-read): while Tracking is on (and no slew
+	// or MoveAxis is in progress) the pointing drifts at the ITelescope
+	// offset rates — RightAscensionRate (seconds of RA per second) and
+	// DeclinationRate (arcseconds per second) — accrued since rateEpoch.
+	// ConformU measures this motion over wall-clock time. Every state
+	// transition folds accrued drift via settleRatesLocked so elapsed time is
+	// never double-counted.
+	rateEpoch time.Time
+
 	// What state to apply when the current slew completes.
 	parkOnArrive bool
 	homeOnArrive bool
@@ -33,14 +53,17 @@ type Telescope struct {
 	atPark bool
 	atHome bool
 
-	// Stored targets (last values set by the client).
-	wantRA, wantDec float64
+	// Stored targets (last values set by the client). The Set flags implement
+	// the ASCOM read-before-set rule: Target* reads are InvalidOperation until
+	// a target has been established (explicitly or by a coordinate slew/sync).
+	wantRA, wantDec       float64
+	wantRASet, wantDecSet bool
 
 	// Alt/Az (approximate; stored values).
 	altitude, azimuth float64
 
 	tracking     bool
-	trackingRate alpacadev.DriveRate
+	trackingRate server.DriveRate
 
 	siteLatitude  float64
 	siteLongitude float64
@@ -50,7 +73,7 @@ type Telescope struct {
 	guideRateRA, guideRateD float64
 	doesRefraction          bool
 	slewSettleTime          int
-	sideOfPier              alpacadev.PierSide
+	sideOfPier              server.PierSide
 
 	pulseGuiding bool
 	pulseUntil   time.Time
@@ -75,13 +98,13 @@ func NewTelescope(opts ...TelescopeOption) *Telescope {
 	t := &Telescope{
 		decSlewRate:   90.0, // deg/s — a 90° dec slew takes ~1s
 		raSlewRate:    6.0,  // hours/s — a 6h RA slew takes ~1s
-		trackingRate:  alpacadev.DriveSidereal,
+		trackingRate:  server.DriveSidereal,
 		siteLatitude:  45.0,
 		siteLongitude: 0.0,
 		siteElevation: 100.0,
 		guideRateRA:   0.5 / 3600.0 * 15.0, // ~half sidereal, deg/s
 		guideRateD:    0.5 / 3600.0 * 15.0,
-		sideOfPier:    alpacadev.PierEast,
+		sideOfPier:    server.PierEast,
 		startDec:      90.0,
 		targetDec:     90.0,
 		wantDec:       90.0,
@@ -122,6 +145,7 @@ func (t *Telescope) settleLocked() {
 		t.startRA = t.targetRA
 		t.startDec = t.targetDec
 		t.slewing = false
+		t.rateEpoch = time.Now() // rate-offset drift resumes from completion
 		if t.parkOnArrive {
 			t.parkOnArrive = false
 			t.atPark = true
@@ -134,9 +158,57 @@ func (t *Telescope) settleLocked() {
 	}
 }
 
+// axisMovingLocked reports whether a MoveAxis drift is active. Caller holds t.mu.
+func (t *Telescope) axisMovingLocked() bool {
+	return t.axisRates[0] != 0 || t.axisRates[1] != 0
+}
+
+// rateDriftActiveLocked reports whether the tracking rate offsets are moving
+// the pointing. Rate offsets are only valid when tracking at Sidereal
+// (ITelescopeV4). Caller holds t.mu.
+func (t *Telescope) rateDriftActiveLocked() bool {
+	return t.tracking && t.trackingRate == server.DriveSidereal &&
+		!t.slewing && !t.axisMovingLocked() &&
+		(t.raRate != 0 || t.decRate != 0) && !t.rateEpoch.IsZero()
+}
+
+// settleRatesLocked folds accumulated rate-offset drift into the resting
+// position and restarts the drift clock. Call at every state transition that
+// changes what governs the pointing. Caller holds t.mu.
+func (t *Telescope) settleRatesLocked() {
+	if t.rateDriftActiveLocked() {
+		el := time.Since(t.rateEpoch).Seconds()
+		t.startRA = wrap24(t.startRA + t.raRate*el/3600.0)      // sec RA → hours
+		t.startDec = clampDec(t.startDec + t.decRate*el/3600.0) // arcsec → deg
+		t.targetRA, t.targetDec = t.startRA, t.startDec
+	}
+	t.rateEpoch = time.Now()
+}
+
+// settleAxesLocked folds accumulated MoveAxis drift into the resting position
+// and restarts the drift clock. Caller holds t.mu.
+func (t *Telescope) settleAxesLocked() {
+	if !t.axisMovingLocked() {
+		return
+	}
+	el := time.Since(t.axisStart).Seconds()
+	t.startRA = wrap24(t.startRA + t.axisRates[0]/15.0*el)
+	t.startDec = clampDec(t.startDec + t.axisRates[1]*el)
+	t.targetRA, t.targetDec = t.startRA, t.startDec
+	t.axisStart = time.Now()
+}
+
 // currentRALocked returns the present right ascension (hours). Caller holds t.mu.
 func (t *Telescope) currentRALocked() float64 {
+	if t.axisMovingLocked() {
+		el := time.Since(t.axisStart).Seconds()
+		return wrap24(t.startRA + t.axisRates[0]/15.0*el)
+	}
 	if !t.slewing {
+		if t.rateDriftActiveLocked() {
+			el := time.Since(t.rateEpoch).Seconds()
+			return wrap24(t.startRA + t.raRate*el/3600.0)
+		}
 		return t.startRA
 	}
 	dist := t.targetRA - t.startRA
@@ -149,7 +221,15 @@ func (t *Telescope) currentRALocked() float64 {
 
 // currentDecLocked returns the present declination (degrees). Caller holds t.mu.
 func (t *Telescope) currentDecLocked() float64 {
+	if t.axisMovingLocked() {
+		el := time.Since(t.axisStart).Seconds()
+		return clampDec(t.startDec + t.axisRates[1]*el)
+	}
 	if !t.slewing {
+		if t.rateDriftActiveLocked() {
+			el := time.Since(t.rateEpoch).Seconds()
+			return clampDec(t.startDec + t.decRate*el/3600.0)
+		}
 		return t.startDec
 	}
 	dist := t.targetDec - t.startDec
@@ -160,8 +240,12 @@ func (t *Telescope) currentDecLocked() float64 {
 	return t.startDec + math.Copysign(travel, dist)
 }
 
-// beginSlewLocked starts a slew to the given RA/Dec target. Caller holds t.mu.
+// beginSlewLocked starts a slew to the given RA/Dec target, taking over from
+// any MoveAxis or rate-offset drift. Caller holds t.mu.
 func (t *Telescope) beginSlewLocked(ra, dec float64) {
+	t.settleAxesLocked()
+	t.axisRates = [3]float64{}
+	t.settleRatesLocked()
 	t.startRA = t.currentRALocked()
 	t.startDec = t.currentDecLocked()
 	t.targetRA = ra
@@ -170,6 +254,24 @@ func (t *Telescope) beginSlewLocked(ra, dec float64) {
 	t.slewing = (t.startRA != t.targetRA) || (t.startDec != t.targetDec)
 	t.atPark = false
 	t.atHome = false
+}
+
+func wrap24(h float64) float64 {
+	h = math.Mod(h, 24)
+	if h < 0 {
+		h += 24
+	}
+	return h
+}
+
+func clampDec(d float64) float64 {
+	if d > 90 {
+		return 90
+	}
+	if d < -90 {
+		return -90
+	}
+	return d
 }
 
 // --- capability flags ---
@@ -191,12 +293,12 @@ func (t *Telescope) CanSync() bool                  { return true }
 func (t *Telescope) CanSyncAltAz() bool             { return true }
 func (t *Telescope) CanUnpark() bool                { return true }
 
-func (t *Telescope) AlignmentMode() alpacadev.AlignmentMode {
-	return alpacadev.AlignGermanPolar
+func (t *Telescope) AlignmentMode() server.AlignmentMode {
+	return server.AlignGermanPolar
 }
 
-func (t *Telescope) EquatorialSystem() alpacadev.EquatorialCoordinateType {
-	return alpacadev.EquJ2000
+func (t *Telescope) EquatorialSystem() server.EquatorialCoordinateType {
+	return server.EquJ2000
 }
 
 // --- optics ---
@@ -237,7 +339,9 @@ func (t *Telescope) Slewing() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.settleLocked()
-	return t.slewing
+	// A MoveAxis drift is motion too: ConformU requires Slewing == true while
+	// any nonzero axis rate is applied.
+	return t.slewing || t.axisMovingLocked()
 }
 
 func (t *Telescope) AtPark() bool {
@@ -256,58 +360,78 @@ func (t *Telescope) AtHome() bool {
 
 // --- targets ---
 
-func (t *Telescope) TargetRightAscension() float64 {
+func (t *Telescope) TargetRightAscension() (float64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.wantRA
+	if !t.wantRASet {
+		// ASCOM read-before-set rule: no target has been established yet.
+		return 0, server.ErrInvalidOperation
+	}
+	return t.wantRA, nil
 }
 
 func (t *Telescope) SetTargetRightAscension(v float64) error {
-	if v < 0 || v >= 24 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.wantRA = v
+	t.wantRASet = true
 	return nil
 }
 
-func (t *Telescope) TargetDeclination() float64 {
+func (t *Telescope) TargetDeclination() (float64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.wantDec
+	if !t.wantDecSet {
+		return 0, server.ErrInvalidOperation
+	}
+	return t.wantDec, nil
 }
 
 func (t *Telescope) SetTargetDeclination(v float64) error {
-	if v < -90 || v > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.wantDec = v
+	t.wantDecSet = true
 	return nil
 }
 
 // --- slews ---
 
 func (t *Telescope) SlewToCoordinates(ra, dec float64) error {
-	return t.SlewToCoordinatesAsync(ra, dec)
+	if err := t.SlewToCoordinatesAsync(ra, dec); err != nil {
+		return err
+	}
+	t.waitSlewDone()
+	return nil
+}
+
+// waitSlewDone blocks until the in-progress slew settles — the synchronous
+// slew contract: the method returns with the mount AT the target (ConformU
+// reads the position immediately on return). Sim slews finish in ~1s.
+func (t *Telescope) waitSlewDone() {
+	for i := 0; i < 600; i++ { // 30s cap
+		if !t.Slewing() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func (t *Telescope) SlewToCoordinatesAsync(ra, dec float64) error {
-	if ra < 0 || ra >= 24 || dec < -90 || dec > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.wantRA = ra
-	t.wantDec = dec
+	t.wantRA, t.wantRASet = ra, true // a coordinate slew establishes the target
+	t.wantDec, t.wantDecSet = dec, true
 	t.beginSlewLocked(ra, dec)
 	return nil
 }
 
 func (t *Telescope) SlewToTarget() error {
-	return t.SlewToTargetAsync()
+	if err := t.SlewToTargetAsync(); err != nil {
+		return err
+	}
+	t.waitSlewDone()
+	return nil
 }
 
 func (t *Telescope) SlewToTargetAsync() error {
@@ -318,18 +442,16 @@ func (t *Telescope) SlewToTargetAsync() error {
 }
 
 func (t *Telescope) SyncToCoordinates(ra, dec float64) error {
-	if ra < 0 || ra >= 24 || dec < -90 || dec > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.wantRA = ra
-	t.wantDec = dec
+	t.wantRA, t.wantRASet = ra, true
+	t.wantDec, t.wantDecSet = dec, true
 	t.startRA = ra
 	t.startDec = dec
 	t.targetRA = ra
 	t.targetDec = dec
 	t.slewing = false
+	t.rateEpoch = time.Now() // sync repositions; drift resumes from here
 	return nil
 }
 
@@ -341,13 +463,14 @@ func (t *Telescope) SyncToTarget() error {
 }
 
 func (t *Telescope) SlewToAltAz(az, alt float64) error {
-	return t.SlewToAltAzAsync(az, alt)
+	if err := t.SlewToAltAzAsync(az, alt); err != nil {
+		return err
+	}
+	t.waitSlewDone()
+	return nil
 }
 
 func (t *Telescope) SlewToAltAzAsync(az, alt float64) error {
-	if az < 0 || az >= 360 || alt < 0 || alt > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.azimuth = az
@@ -368,9 +491,6 @@ func (t *Telescope) SlewToAltAzAsync(az, alt float64) error {
 }
 
 func (t *Telescope) SyncToAltAz(az, alt float64) error {
-	if az < 0 || az >= 360 || alt < 0 || alt > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.azimuth = az
@@ -382,6 +502,9 @@ func (t *Telescope) AbortSlew() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.settleLocked()
+	t.settleAxesLocked()
+	t.axisRates = [3]float64{}
+	t.settleRatesLocked()
 	t.startRA = t.currentRALocked()
 	t.startDec = t.currentDecLocked()
 	t.targetRA = t.startRA
@@ -397,6 +520,9 @@ func (t *Telescope) AbortSlew() error {
 func (t *Telescope) Park() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.atPark {
+		return nil // already parked; Park is idempotent
+	}
 	t.beginSlewLocked(0, 90) // park at the celestial pole
 	t.parkOnArrive = true
 	if !t.slewing {
@@ -437,32 +563,36 @@ func (t *Telescope) Tracking() bool {
 func (t *Telescope) SetTracking(v bool) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.settleRatesLocked() // fold drift accrued under the old tracking state
 	t.tracking = v
 	return nil
 }
 
-func (t *Telescope) TrackingRate() alpacadev.DriveRate {
+func (t *Telescope) TrackingRate() server.DriveRate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.trackingRate
 }
 
-func (t *Telescope) SetTrackingRate(r alpacadev.DriveRate) error {
-	if r < alpacadev.DriveSidereal || r > alpacadev.DriveKing {
-		return alpacadev.ErrInvalidValue
-	}
+func (t *Telescope) SetTrackingRate(r server.DriveRate) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.settleRatesLocked()
+	// ITelescopeV4: rate offsets are only valid when tracking at Sidereal, so
+	// changing the drive rate zeroes them (and reads return 0 afterwards).
+	if r != t.trackingRate {
+		t.raRate, t.decRate = 0, 0
+	}
 	t.trackingRate = r
 	return nil
 }
 
-func (t *Telescope) TrackingRates() []alpacadev.DriveRate {
-	return []alpacadev.DriveRate{
-		alpacadev.DriveSidereal,
-		alpacadev.DriveLunar,
-		alpacadev.DriveSolar,
-		alpacadev.DriveKing,
+func (t *Telescope) TrackingRates() []server.DriveRate {
+	return []server.DriveRate{
+		server.DriveSidereal,
+		server.DriveLunar,
+		server.DriveSolar,
+		server.DriveKing,
 	}
 }
 
@@ -475,9 +605,6 @@ func (t *Telescope) SiteLatitude() float64 {
 }
 
 func (t *Telescope) SetSiteLatitude(v float64) error {
-	if v < -90 || v > 90 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.siteLatitude = v
@@ -491,9 +618,6 @@ func (t *Telescope) SiteLongitude() float64 {
 }
 
 func (t *Telescope) SetSiteLongitude(v float64) error {
-	if v < -180 || v > 180 { // ASCOM SiteLongitude range, positive East
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.siteLongitude = v
@@ -507,9 +631,6 @@ func (t *Telescope) SiteElevation() float64 {
 }
 
 func (t *Telescope) SetSiteElevation(v float64) error {
-	if v < -300 || v > 10000 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.siteElevation = v
@@ -522,12 +643,7 @@ func (t *Telescope) UTCDate() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
-func (t *Telescope) SetUTCDate(s string) error {
-	if _, err := time.Parse(time.RFC3339, s); err != nil {
-		return alpacadev.ErrInvalidValue
-	}
-	return nil
-}
+func (t *Telescope) SetUTCDate(string) error { return nil }
 
 // SiderealTime returns local apparent sidereal time in hours, derived from the
 // clock and site longitude.
@@ -558,6 +674,7 @@ func (t *Telescope) RightAscensionRate() float64 {
 func (t *Telescope) SetRightAscensionRate(v float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.settleRatesLocked() // fold drift accrued at the old rate
 	t.raRate = v
 	return nil
 }
@@ -571,6 +688,7 @@ func (t *Telescope) DeclinationRate() float64 {
 func (t *Telescope) SetDeclinationRate(v float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.settleRatesLocked() // fold drift accrued at the old rate
 	t.decRate = v
 	return nil
 }
@@ -582,9 +700,6 @@ func (t *Telescope) GuideRateRightAscension() float64 {
 }
 
 func (t *Telescope) SetGuideRateRightAscension(v float64) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.guideRateRA = v
@@ -598,9 +713,6 @@ func (t *Telescope) GuideRateDeclination() float64 {
 }
 
 func (t *Telescope) SetGuideRateDeclination(v float64) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.guideRateD = v
@@ -629,36 +741,41 @@ func (t *Telescope) SlewSettleTime() int {
 }
 
 func (t *Telescope) SetSlewSettleTime(v int) error {
-	if v < 0 {
-		return alpacadev.ErrInvalidValue
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.slewSettleTime = v
 	return nil
 }
 
-func (t *Telescope) SideOfPier() alpacadev.PierSide {
+func (t *Telescope) SideOfPier() server.PierSide {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sideOfPier
 }
 
-func (t *Telescope) SetSideOfPier(v alpacadev.PierSide) error {
-	if v != alpacadev.PierEast && v != alpacadev.PierWest {
-		return alpacadev.ErrInvalidValue
-	}
+func (t *Telescope) SetSideOfPier(v server.PierSide) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.sideOfPier = v
 	return nil
 }
 
-func (t *Telescope) DestinationSideOfPier(ra, dec float64) (alpacadev.PierSide, error) {
-	if ra < 12 {
-		return alpacadev.PierEast, nil
+// DestinationSideOfPier reports which side of the pier a German-equatorial
+// mount would settle on for the given coordinates: decided by the target's
+// hour angle (LST − RA), so the answer flips across the meridian — ConformU
+// probes both sides and requires different values.
+func (t *Telescope) DestinationSideOfPier(ra, dec float64) (server.PierSide, error) {
+	ha := math.Mod(t.SiderealTime()-ra, 24)
+	if ha < -12 {
+		ha += 24
 	}
-	return alpacadev.PierWest, nil
+	if ha >= 12 {
+		ha -= 24
+	}
+	if ha < 0 {
+		return server.PierWest, nil // target east of the meridian
+	}
+	return server.PierEast, nil
 }
 
 // --- pulse guiding ---
@@ -672,15 +789,25 @@ func (t *Telescope) IsPulseGuiding() bool {
 	return t.pulseGuiding
 }
 
-func (t *Telescope) PulseGuide(direction alpacadev.GuideDirection, duration int) error {
-	if duration < 0 {
-		return alpacadev.ErrInvalidValue
-	}
-	if direction < alpacadev.GuideNorth || direction > alpacadev.GuideWest {
-		return alpacadev.ErrInvalidValue
-	}
+func (t *Telescope) PulseGuide(direction server.GuideDirection, duration int) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Apply the guide displacement (guide rate × duration) to the pointing:
+	// ConformU measures the position change a pulse produces. Applied up
+	// front for model simplicity; IsPulseGuiding still runs the clock.
+	t.settleRatesLocked()
+	dur := float64(duration) / 1000.0
+	switch direction {
+	case server.GuideNorth:
+		t.startDec = clampDec(t.startDec + t.guideRateD*dur)
+	case server.GuideSouth:
+		t.startDec = clampDec(t.startDec - t.guideRateD*dur)
+	case server.GuideEast:
+		t.startRA = wrap24(t.startRA + t.guideRateRA*dur/15.0) // deg → hours
+	case server.GuideWest:
+		t.startRA = wrap24(t.startRA - t.guideRateRA*dur/15.0)
+	}
+	t.targetRA, t.targetDec = t.startRA, t.startDec
 	t.pulseGuiding = true
 	t.pulseUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
 	return nil
@@ -688,23 +815,30 @@ func (t *Telescope) PulseGuide(direction alpacadev.GuideDirection, duration int)
 
 // --- axis motion ---
 
-func (t *Telescope) CanMoveAxis(axis alpacadev.TelescopeAxis) bool {
-	return axis == alpacadev.AxisPrimary || axis == alpacadev.AxisSecondary
+func (t *Telescope) CanMoveAxis(axis server.TelescopeAxis) bool {
+	return axis == server.AxisPrimary || axis == server.AxisSecondary
 }
 
-func (t *Telescope) AxisRates(axis alpacadev.TelescopeAxis) []alpacadev.AxisRate {
-	return []alpacadev.AxisRate{{Minimum: 0, Maximum: 5}}
+func (t *Telescope) AxisRates(axis server.TelescopeAxis) []server.AxisRate {
+	return []server.AxisRate{{Minimum: 0, Maximum: 5}}
 }
 
-func (t *Telescope) MoveAxis(axis alpacadev.TelescopeAxis, rate float64) error {
-	if !t.CanMoveAxis(axis) {
-		return alpacadev.ErrInvalidValue
+func (t *Telescope) MoveAxis(axis server.TelescopeAxis, rate float64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Take over motion: freeze any target slew at its present position, fold
+	// accumulated drift, then apply the new rate (0 stops this axis).
+	t.settleRatesLocked()
+	t.startRA = t.currentRALocked()
+	t.startDec = t.currentDecLocked()
+	t.slewing = false
+	t.parkOnArrive = false
+	t.homeOnArrive = false
+	t.settleAxesLocked()
+	t.axisRates[axis] = rate
+	t.axisStart = time.Now()
+	if rate != 0 {
+		t.atHome = false
 	}
-	rates := t.AxisRates(axis)
-	for _, r := range rates {
-		if math.Abs(rate) >= r.Minimum && math.Abs(rate) <= r.Maximum {
-			return nil
-		}
-	}
-	return alpacadev.ErrInvalidValue
+	return nil
 }

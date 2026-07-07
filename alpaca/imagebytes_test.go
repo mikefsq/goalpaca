@@ -1,4 +1,4 @@
-package alpacadev
+package alpaca
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ func TestImageBytesTranspose(t *testing.T) {
 	}
 
 	buf := EncodeImageBytes(frame, 0, 0)
-	pix := buf[imageBytesMetadataLen:]
+	pix := buf[ImageBytesHeaderLen:]
 
 	// Column-major wire order over (x,y), y fastest: x0y0,x0y1,x1y0,x1y1,x2y0,x2y1
 	// = src(0,0),src(1,0),src(0,1),src(1,1),src(0,2),src(1,2) = 0,3,1,4,2,5
@@ -103,10 +103,10 @@ func BenchmarkEncode62MP(b *testing.B) {
 		TransmissionElementType: ImgUInt16,
 		Pixels:                  make([]byte, w*h*2),
 	}
-	dst := make([]byte, imageBytesMetadataLen+len(frame.Pixels))
+	dst := make([]byte, ImageBytesHeaderLen+len(frame.Pixels))
 	b.SetBytes(int64(len(frame.Pixels)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		encodeImageBytesInto(dst, frame, 0, 0)
+		EncodeImageBytesInto(dst, frame, 0, 0)
 	}
 }

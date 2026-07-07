@@ -6,13 +6,8 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
-
-// covercalibratorPollTimeout bounds how long the checks wait for an
-// asynchronous calibrator or cover transition to settle. The sim's transitions
-// are ~400ms (calibrator) and ~700ms (cover), so ~6s is comfortably generous.
-const covercalibratorPollTimeout = 6 * time.Second
 
 // CheckCoverCalibrator runs the ConformU CoverCalibrator conformance checks
 // against c. Ported from ConformU's CoverCalibratorTester (CheckProperties /
@@ -25,7 +20,7 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.Brightness(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.Brightness(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Brightness() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -62,7 +57,7 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 		t.Errorf("CalibratorOn(50): %v", err)
 	} else {
 		covercalibratorWaitCalibratorSettled(t, c)
-		if s, err := c.CalibratorState(); err != nil || s != alpacadev.CalibratorReady {
+		if s, err := c.CalibratorState(); err != nil || s != server.CalibratorReady {
 			t.Errorf("CalibratorState() after CalibratorOn = %v, %v; want CalibratorReady", s, err)
 		}
 		if b, err := c.Brightness(); err != nil || b != 50 {
@@ -71,12 +66,12 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 	}
 
 	// CalibratorOn validation: out-of-range brightness is rejected (high).
-	if err := c.CalibratorOn(500); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.CalibratorOn(500); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("CalibratorOn(500): want InvalidValue, got %v", err)
 	}
 
 	// CalibratorOn validation: negative brightness is rejected (low).
-	if err := c.CalibratorOn(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.CalibratorOn(-1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("CalibratorOn(-1): want InvalidValue, got %v", err)
 	}
 
@@ -85,7 +80,7 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 		t.Errorf("CalibratorOff(): %v", err)
 	} else {
 		covercalibratorWaitCalibratorSettled(t, c)
-		if s, err := c.CalibratorState(); err != nil || s != alpacadev.CalibratorOff {
+		if s, err := c.CalibratorState(); err != nil || s != server.CalibratorOff {
 			t.Errorf("CalibratorState() after CalibratorOff = %v, %v; want CalibratorOff", s, err)
 		}
 	}
@@ -94,8 +89,8 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 	if err := c.OpenCover(); err != nil {
 		t.Errorf("OpenCover(): %v", err)
 	} else {
-		covercalibratorWaitCoverState(t, c, alpacadev.CoverOpen)
-		if s, err := c.CoverState(); err != nil || s != alpacadev.CoverOpen {
+		covercalibratorWaitCoverState(t, c, server.CoverOpen)
+		if s, err := c.CoverState(); err != nil || s != server.CoverOpen {
 			t.Errorf("CoverState() after OpenCover = %v, %v; want CoverOpen", s, err)
 		}
 	}
@@ -104,8 +99,8 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 	if err := c.CloseCover(); err != nil {
 		t.Errorf("CloseCover(): %v", err)
 	} else {
-		covercalibratorWaitCoverState(t, c, alpacadev.CoverClosed)
-		if s, err := c.CoverState(); err != nil || s != alpacadev.CoverClosed {
+		covercalibratorWaitCoverState(t, c, server.CoverClosed)
+		if s, err := c.CoverState(); err != nil || s != server.CoverClosed {
 			t.Errorf("CoverState() after CloseCover = %v, %v; want CoverClosed", s, err)
 		}
 	}
@@ -129,14 +124,14 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 		} else if moving {
 			if s, err := c.CoverState(); err != nil {
 				t.Errorf("CoverState() (agreement check): %v", err)
-			} else if s != alpacadev.CoverMoving {
+			} else if s != server.CoverMoving {
 				t.Errorf("CoverState() while CoverMoving = %v; want CoverMoving", s)
 			}
 		} else {
 			t.Log("CoverMoving<->CoverState agreement check skipped: move settled before it could be observed")
 		}
 		// Let the open complete so the device is in a known state.
-		covercalibratorWaitCoverState(t, c, alpacadev.CoverOpen)
+		covercalibratorWaitCoverState(t, c, server.CoverOpen)
 	}
 
 	// HaltCover mid-motion: starting from open, begin closing, confirm the cover
@@ -149,8 +144,13 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 				t.Errorf("HaltCover() mid-motion: %v", err)
 			} else if s, err := c.CoverState(); err != nil {
 				t.Errorf("CoverState() after HaltCover: %v", err)
-			} else if s == alpacadev.CoverMoving {
+			} else if s == server.CoverMoving {
 				t.Errorf("CoverState() after HaltCover = CoverMoving; want a settled state")
+			} else if s == server.CoverClosed {
+				// The close was confirmed in flight when halted, so the cover
+				// cannot be at its destination; a halted-mid-travel cover
+				// reports Unknown (or its actual intermediate reality).
+				t.Errorf("CoverState() after mid-motion HaltCover = CoverClosed (the interrupted move's destination); want Unknown or an intermediate state")
 			}
 		} else {
 			t.Log("HaltCover mid-motion check skipped: cover never observed moving")
@@ -159,7 +159,7 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 		if err := c.CloseCover(); err != nil {
 			t.Errorf("CloseCover() (restore): %v", err)
 		} else {
-			covercalibratorWaitCoverState(t, c, alpacadev.CoverClosed)
+			covercalibratorWaitCoverState(t, c, server.CoverClosed)
 		}
 	}
 }
@@ -169,7 +169,7 @@ func CheckCoverCalibrator(t *testing.T, c *client.CoverCalibrator) {
 // the result to skip checks that depend on catching the cover mid-motion.
 func covercalibratorWaitCoverMoving(t *testing.T, c *client.CoverCalibrator) bool {
 	t.Helper()
-	deadline := time.Now().Add(covercalibratorPollTimeout)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		moving, err := c.CoverMoving()
 		if err != nil {
@@ -187,7 +187,7 @@ func covercalibratorWaitCoverMoving(t *testing.T, c *client.CoverCalibrator) boo
 // calibrator transition completes or the poll timeout elapses.
 func covercalibratorWaitCalibratorSettled(t *testing.T, c *client.CoverCalibrator) {
 	t.Helper()
-	deadline := time.Now().Add(covercalibratorPollTimeout)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		changing, err := c.CalibratorChanging()
 		if err != nil {
@@ -203,9 +203,9 @@ func covercalibratorWaitCalibratorSettled(t *testing.T, c *client.CoverCalibrato
 
 // covercalibratorWaitCoverState polls CoverState until it reaches want or the
 // poll timeout elapses.
-func covercalibratorWaitCoverState(t *testing.T, c *client.CoverCalibrator, want alpacadev.CoverStatus) {
+func covercalibratorWaitCoverState(t *testing.T, c *client.CoverCalibrator, want server.CoverStatus) {
 	t.Helper()
-	deadline := time.Now().Add(covercalibratorPollTimeout)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		s, err := c.CoverState()
 		if err != nil {

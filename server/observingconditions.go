@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // ObservingConditions is the ASCOM ObservingConditions interface
 // (IObservingConditionsV1/V2). Sensor properties return an error (typically
@@ -101,10 +101,18 @@ func observingConditionsGet(member string, oc ObservingConditions, p params) (an
 		return v, true, err
 	case "sensordescription":
 		name, _ := p.get("SensorName")
+		// IObservingConditionsV2: unknown sensor names are InvalidValue (and,
+		// unlike TimeSinceLastUpdate, the empty string is not a valid name).
+		if !validOCSensor(name, false) {
+			return nil, true, invalidValuef("SensorName %q is not an ObservingConditions sensor", name)
+		}
 		v, err := oc.SensorDescription(name)
 		return v, true, err
 	case "timesincelastupdate":
 		name, _ := p.get("SensorName")
+		if !validOCSensor(name, true) { // "" means "any sensor"
+			return nil, true, invalidValuef("SensorName %q is not an ObservingConditions sensor", name)
+		}
 		v, err := oc.TimeSinceLastUpdate(name)
 		return v, true, err
 	}
@@ -117,6 +125,9 @@ func observingConditionsPut(member string, oc ObservingConditions, p params) (bo
 		f, err := p.reqFloat("AveragePeriod")
 		if err != nil {
 			return true, err
+		}
+		if f < 0 {
+			return true, invalidValuef("AveragePeriod %g is negative", f)
 		}
 		return true, oc.SetAveragePeriod(f)
 	case "refresh":

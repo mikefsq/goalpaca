@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // Rotator is the ASCOM Rotator interface (IRotatorV3/V4). Move/MoveAbsolute/
 // MoveMechanical are initiators; IsMoving is the completion property. Angles
@@ -68,6 +68,9 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
+		if !r.CanReverse() {
+			return true, notImplErr("Reverse")
+		}
 		return true, r.SetReverse(b)
 	case "halt":
 		return true, r.Halt()
@@ -82,17 +85,27 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
+		// IRotatorV3: absolute sky angles are 0 up to (not including) 360.
+		if f < 0 || f >= 360 {
+			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
+		}
 		return true, r.MoveAbsolute(f)
 	case "movemechanical":
 		f, err := p.reqFloat("Position")
 		if err != nil {
 			return true, err
 		}
+		if f < 0 || f >= 360 { // see moveabsolute
+			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
+		}
 		return true, r.MoveMechanical(f)
 	case "sync":
 		f, err := p.reqFloat("Position")
 		if err != nil {
 			return true, err
+		}
+		if f < 0 || f >= 360 { // see moveabsolute
+			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
 		}
 		return true, r.Sync(f)
 	}

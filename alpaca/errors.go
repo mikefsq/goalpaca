@@ -1,10 +1,10 @@
-package alpacadev
+package alpaca
 
 import "errors"
 
-// ASCOM Alpaca reserved error numbers. Driver-defined errors use the
-// 0x500–0xFFF range. (Confirm the full reserved table against the Alpaca API
-// reference — spec §12 open item #1.)
+// ASCOM Alpaca reserved error numbers, per the Alpaca API Reference
+// (reserved range 0x400–0x4FF; verified against v12, Feb 2026).
+// Driver-defined errors use the 0x500–0xFFF range.
 const (
 	ErrNumNotImplemented        = 0x400
 	ErrNumInvalidValue          = 0x401
@@ -34,6 +34,7 @@ type AlpacaError struct {
 	Message string
 }
 
+// Error implements the error interface; it returns the ASCOM error message.
 func (e *AlpacaError) Error() string { return e.Message }
 
 // Is matches by ASCOM error number, so errors.Is(err, ErrNotImplemented) works

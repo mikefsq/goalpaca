@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strconv"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/alpaca"
 )
 
 // Focuser is a client for an ASCOM Focuser device.

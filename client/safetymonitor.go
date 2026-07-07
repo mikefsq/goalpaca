@@ -1,6 +1,6 @@
 package client
 
-import alpaca "github.com/mikefsq/goalpaca/server"
+import "github.com/mikefsq/goalpaca/alpaca"
 
 // SafetyMonitor is a client for an ASCOM SafetyMonitor device.
 type SafetyMonitor struct{ Device }

@@ -6,25 +6,24 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
-
-// cameraImageReadyTimeout bounds the async wait for an exposure to complete.
-// Tests use short exposures (~0.05s); ConformU polls ImageReady until done.
-const cameraImageReadyTimeout = 6 * time.Second
 
 // CheckCamera runs the ConformU Camera conformance checks against c. Ported from
 // ConformU's CameraTester (CheckProperties / CheckMethods): NotConnected gating,
 // sensor geometry and description, binning ranges, subframe/gain/offset
-// round-trips, cooling, the exposure happy path (StartExposure → poll
-// ImageReady → ImageArray frame), and out-of-range → InvalidValue. Assertions
-// are aligned to the goalpaca camera simulator and assume short exposures.
+// round-trips, cooling with cooler set-point limit validation, the exposure
+// happy path (StartExposure → poll ImageReady → ImageArray frame) with the
+// CameraState transition and last-exposure UTC start-time format/recency,
+// mid-exposure Stop (keeps the frame) / Abort (discards it), and out-of-range
+// → InvalidValue. Assertions are aligned to the goalpaca camera simulator and
+// assume short exposures.
 func CheckCamera(t *testing.T, c *client.Camera) {
 	t.Helper()
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.CameraXSize(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.CameraXSize(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("CameraXSize() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -62,25 +61,25 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 
 	// --- Unsupported-capability members must report NotImplemented (ASCOM) ---
 	// Monochrome sensor: Bayer offsets are not implemented.
-	if _, err := c.BayerOffsetX(); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if _, err := c.BayerOffsetX(); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("BayerOffsetX() on monochrome: want NotImplemented, got %v", err)
 	}
-	if _, err := c.BayerOffsetY(); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if _, err := c.BayerOffsetY(); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("BayerOffsetY() on monochrome: want NotImplemented, got %v", err)
 	}
 	// Value (min/max) gain & offset mode: the name lists are not implemented.
-	if _, err := c.Gains(); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if _, err := c.Gains(); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("Gains() in value mode: want NotImplemented, got %v", err)
 	}
-	if _, err := c.Offsets(); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if _, err := c.Offsets(); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("Offsets() in value mode: want NotImplemented, got %v", err)
 	}
 	// CanFastReadout is false ⇒ reading FastReadout must report NotImplemented.
-	if _, err := c.FastReadout(); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if _, err := c.FastReadout(); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("FastReadout() when CanFastReadout false: want NotImplemented, got %v", err)
 	}
 	// CanPulseGuide is false ⇒ PulseGuide must report NotImplemented.
-	if err := c.PulseGuide(alpacadev.GuideNorth, 10); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if err := c.PulseGuide(server.GuideNorth, 10); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("PulseGuide() when CanPulseGuide false: want NotImplemented, got %v", err)
 	}
 
@@ -110,7 +109,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 		t.Errorf("SetBinY(1) restore: %v", err)
 	}
 	for _, bad := range []int{99, 0} { // MaxBinX is 4
-		if err := c.SetBinX(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetBinX(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("SetBinX(%d): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -129,7 +128,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	if g, err := c.Gain(); err != nil || g != 150 {
 		t.Errorf("Gain() after set = %v, %v; want 150", g, err)
 	}
-	if err := c.SetGain(9999); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetGain(9999); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetGain(9999): want InvalidValue, got %v", err)
 	}
 
@@ -139,7 +138,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	if o, err := c.Offset(); err != nil || o != 50 {
 		t.Errorf("Offset() after set = %v, %v; want 50", o, err)
 	}
-	if err := c.SetOffset(9999); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetOffset(9999); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetOffset(9999): want InvalidValue, got %v", err)
 	}
 
@@ -153,6 +152,15 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	if sp, err := c.SetCCDTemperature(); err != nil || sp < -10.5 || sp > -9.5 {
 		t.Errorf("SetCCDTemperature() setpoint = %v, %v; want ~-10", sp, err)
 	}
+	// ConformU steps the set point up from 0 °C in 5° increments and flags an
+	// issue if no error occurs before reaching 100 °C: a real cooler's set
+	// point must top out below boiling.
+	if err := c.SetSetCCDTemperature(100); !errors.Is(err, server.ErrInvalidValue) {
+		t.Errorf("SetSetCCDTemperature(100): want InvalidValue (upper limit below 100 C), got %v", err)
+	}
+	if err := c.SetSetCCDTemperature(-300); !errors.Is(err, server.ErrInvalidValue) {
+		t.Errorf("SetSetCCDTemperature(-300): want InvalidValue (below absolute zero), got %v", err)
+	}
 	if err := c.SetCoolerOn(true); err != nil {
 		t.Errorf("SetCoolerOn(true): %v", err)
 	}
@@ -164,9 +172,10 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	}
 
 	// --- Exposure happy path ---
-	// Before any exposure, ImageArray must report that no image is available.
-	if _, err := c.ImageArray(); !errors.Is(err, alpacadev.ErrValueNotSet) {
-		t.Errorf("ImageArray() before exposure: want ValueNotSet, got %v", err)
+	// Before any exposure, ImageArray must report InvalidOperation (0x40B) —
+	// ICameraV4 specifies InvalidOperationException while ImageReady is false.
+	if _, err := c.ImageArray(); !errors.Is(err, server.ErrInvalidOperation) {
+		t.Errorf("ImageArray() before exposure: want InvalidOperation, got %v", err)
 	}
 
 	numX, err := c.NumX()
@@ -206,7 +215,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	}
 
 	// --- Exposure validation ---
-	if err := c.StartExposure(99999, true); !errors.Is(err, alpacadev.ErrInvalidValue) { // > ExposureMax
+	if err := c.StartExposure(99999, true); !errors.Is(err, server.ErrInvalidValue) { // > ExposureMax
 		t.Errorf("StartExposure(99999): want InvalidValue, got %v", err)
 	}
 
@@ -215,7 +224,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	if err := c.SetNumX(99999); err != nil {
 		t.Errorf("SetNumX(99999): %v", err)
 	}
-	if err := c.StartExposure(0.05, true); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.StartExposure(0.05, true); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("StartExposure with oversized NumX: want InvalidValue, got %v", err)
 	}
 	_ = c.SetNumX(origNumX) // restore
@@ -238,7 +247,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 
 	// BinY out-of-range writes must report InvalidValue (mirrors the BinX checks).
 	for _, bad := range []int{0, 99} {
-		if err := c.SetBinY(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetBinY(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("SetBinY(%d): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -374,7 +383,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	time.Sleep(50 * time.Millisecond)
 	if st, err := c.CameraState(); err != nil {
 		t.Errorf("CameraState() during exposure: %v", err)
-	} else if st != alpacadev.CameraExposing {
+	} else if st != server.CameraExposing {
 		t.Errorf("CameraState() during exposure = %v; want CameraExposing", st)
 	}
 	if !cameraWaitImageReady(t, c) {
@@ -382,7 +391,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	}
 	if st, err := c.CameraState(); err != nil {
 		t.Errorf("CameraState() after exposure: %v", err)
-	} else if st != alpacadev.CameraIdle {
+	} else if st != server.CameraIdle {
 		t.Errorf("CameraState() after exposure = %v; want CameraIdle", st)
 	}
 
@@ -396,6 +405,14 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 		t.Errorf("LastExposureStartTime(): %v", err)
 	} else if ts == "" {
 		t.Errorf("LastExposureStartTime() is empty; want a non-empty timestamp")
+	} else if start, perr := time.Parse("2006-01-02T15:04:05", ts[:min(len(ts), 19)]); perr != nil {
+		// ConformU requires the FITS-style yyyy-mm-ddThh:mm:ss prefix.
+		t.Errorf("LastExposureStartTime() = %q; want yyyy-mm-ddThh:mm:ss format: %v", ts, perr)
+	} else if d := time.Now().UTC().Sub(start); d < 0 || d > 2*time.Minute {
+		// ConformU parses the string as UTC and requires it within 2 seconds
+		// of the exposure start; a local-time string shows up as a whole
+		// timezone offset, which this window catches.
+		t.Errorf("LastExposureStartTime() = %q; not a recent UTC timestamp (off by %v)", ts, d)
 	}
 
 	// --- Abort / Stop when idle must succeed ---
@@ -405,13 +422,59 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	if err := c.StopExposure(); err != nil {
 		t.Errorf("StopExposure() when idle: %v", err)
 	}
+	// Idle Abort/Stop must not have discarded the completed image.
+	if ready, err := c.ImageReady(); err != nil || !ready {
+		t.Errorf("ImageReady() after idle Abort/Stop = %v, %v; want true (completed image kept)", ready, err)
+	}
+
+	// --- StopExposure mid-exposure keeps the partial image ---
+	if err := c.StartExposure(2, true); err != nil {
+		t.Fatalf("StartExposure(2, true): %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := c.StopExposure(); err != nil {
+		t.Fatalf("StopExposure() mid-exposure: %v", err)
+	}
+	if !cameraWaitImageReady(t, c) {
+		t.Error("image did not become ready after mid-exposure StopExposure")
+	}
+	if st, err := c.CameraState(); err != nil || st != server.CameraIdle {
+		t.Errorf("CameraState() after StopExposure = %v, %v; want CameraIdle", st, err)
+	}
+	if d, err := c.LastExposureDuration(); err != nil {
+		t.Errorf("LastExposureDuration() after stop: %v", err)
+	} else if d >= 2 {
+		t.Errorf("LastExposureDuration() after stop = %v; want the actual (shortened) duration", d)
+	}
+
+	// --- AbortExposure mid-exposure discards the image ---
+	if err := c.StartExposure(2, true); err != nil {
+		t.Fatalf("StartExposure(2, true): %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := c.AbortExposure(); err != nil {
+		t.Fatalf("AbortExposure() mid-exposure: %v", err)
+	}
+	if st, err := c.CameraState(); err != nil || st != server.CameraIdle {
+		t.Errorf("CameraState() after AbortExposure = %v, %v; want CameraIdle", st, err)
+	}
+	// The aborted exposure must never yield an image: ImageReady stays false
+	// (checked past the original exposure window would be ideal, but 2s is too
+	// slow for a unit run; immediately-after is the regression that mattered)
+	// and ImageArray reports InvalidOperation.
+	if ready, err := c.ImageReady(); err != nil || ready {
+		t.Errorf("ImageReady() after abort = %v, %v; want false", ready, err)
+	}
+	if _, err := c.ImageArray(); !errors.Is(err, server.ErrInvalidOperation) {
+		t.Errorf("ImageArray() after abort: want InvalidOperation, got %v", err)
+	}
 }
 
 // cameraWaitImageReady polls ImageReady until it reports true or the timeout
 // elapses, returning whether the image became ready.
 func cameraWaitImageReady(t *testing.T, c *client.Camera) bool {
 	t.Helper()
-	deadline := time.Now().Add(cameraImageReadyTimeout)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		ready, err := c.ImageReady()
 		if err != nil {

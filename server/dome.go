@@ -1,15 +1,4 @@
-package alpacadev
-
-// ShutterState mirrors the ASCOM ShutterState enum.
-type ShutterState int
-
-const (
-	ShutterOpen    ShutterState = 0
-	ShutterClosed  ShutterState = 1
-	ShutterOpening ShutterState = 2
-	ShutterClosing ShutterState = 3
-	ShutterErr     ShutterState = 4
-)
+package server
 
 // Dome is the ASCOM Dome interface (IDomeV2/V3). The shutter and slew methods
 // are initiators; Slewing / ShutterStatus / AtHome / AtPark are completion
@@ -115,6 +104,9 @@ func domeGet(member string, d Dome, _ params) (any, bool, error) {
 	return nil, false, nil
 }
 
+// domePut dispatches Dome PUT members, applying the spec-fixed gates
+// (Can-flag → NotImplemented, coordinate ranges → InvalidValue) before the
+// driver is called.
 func domePut(member string, d Dome, p params) (bool, error) {
 	switch member {
 	case "slaved":
@@ -122,22 +114,46 @@ func domePut(member string, d Dome, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
+		if b && !d.CanSlave() {
+			return true, notImplErr("Slaved")
+		}
 		return true, d.SetSlaved(b)
 	case "abortslew":
 		return true, d.AbortSlew()
 	case "closeshutter":
+		if !d.CanSetShutter() {
+			return true, notImplErr("CloseShutter")
+		}
 		return true, d.CloseShutter()
 	case "findhome":
+		if !d.CanFindHome() {
+			return true, notImplErr("FindHome")
+		}
 		return true, d.FindHome()
 	case "openshutter":
+		if !d.CanSetShutter() {
+			return true, notImplErr("OpenShutter")
+		}
 		return true, d.OpenShutter()
 	case "park":
+		if !d.CanPark() {
+			return true, notImplErr("Park")
+		}
 		return true, d.Park()
 	case "setpark":
+		if !d.CanSetPark() {
+			return true, notImplErr("SetPark")
+		}
 		return true, d.SetPark()
 	case "slewtoaltitude":
 		f, err := p.reqFloat("Altitude")
 		if err != nil {
+			return true, err
+		}
+		if !d.CanSetAltitude() {
+			return true, notImplErr("SlewToAltitude")
+		}
+		if err := invalidRange("Altitude", f, 0, 90); err != nil {
 			return true, err
 		}
 		return true, d.SlewToAltitude(f)
@@ -146,10 +162,22 @@ func domePut(member string, d Dome, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
+		if !d.CanSetAzimuth() {
+			return true, notImplErr("SlewToAzimuth")
+		}
+		if err := invalidRange("Azimuth", f, 0, 360); err != nil {
+			return true, err
+		}
 		return true, d.SlewToAzimuth(f)
 	case "synctoazimuth":
 		f, err := p.reqFloat("Azimuth")
 		if err != nil {
+			return true, err
+		}
+		if !d.CanSyncAzimuth() {
+			return true, notImplErr("SyncToAzimuth")
+		}
+		if err := invalidRange("Azimuth", f, 0, 360); err != nil {
 			return true, err
 		}
 		return true, d.SyncToAzimuth(f)

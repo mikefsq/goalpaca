@@ -1,10 +1,10 @@
 package sim
 
-import alpacadev "github.com/mikefsq/goalpaca/server"
+import "github.com/mikefsq/goalpaca/server"
 
 // SafetyMonitor is a simulated ASCOM SafetyMonitor (defaults to safe).
 type SafetyMonitor struct {
-	alpacadev.BaseSafetyMonitor
+	server.BaseSafetyMonitor
 	safe bool
 }
 

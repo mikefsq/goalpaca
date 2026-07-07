@@ -6,15 +6,12 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // filterWheelMoving is the ASCOM sentinel returned by Position while the wheel
 // is in motion.
 const filterWheelMoving = -1
-
-// filterWheelMoveTimeout bounds how long we wait for a move to complete.
-const filterWheelMoveTimeout = 6 * time.Second
 
 // CheckFilterWheel runs the ConformU FilterWheel conformance checks against c.
 // Ported from ConformU's FilterWheelTester (CheckProperties / Position Set):
@@ -26,7 +23,7 @@ func CheckFilterWheel(t *testing.T, c *client.FilterWheel) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.Position(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.Position(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Position() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -65,7 +62,11 @@ func CheckFilterWheel(t *testing.T, c *client.FilterWheel) {
 	}
 
 	// Position Set happy path: move to slot 2 (when available) and back to 0,
-	// each time confirming arrival at the requested slot.
+	// each time confirming arrival at the requested slot. During a cross-slot
+	// move, Position must report the moving sentinel (-1) — a wheel that
+	// teleports (never reports -1) or reports a stale slot mid-move fails;
+	// ConformU reads Position while the move is in flight for the same reason.
+	prev := filterWheelWaitArrived(t, c)
 	targets := []int{0}
 	if len(names) > 2 {
 		targets = []int{2, 0}
@@ -75,10 +76,14 @@ func CheckFilterWheel(t *testing.T, c *client.FilterWheel) {
 			t.Errorf("SetPosition(%d): %v", target, err)
 			continue
 		}
-		got := filterWheelWaitArrived(t, c)
+		got, sawMoving := filterWheelWaitArrivedObserved(t, c)
 		if got != target {
 			t.Errorf("SetPosition(%d): Position settled at %d; want %d", target, got, target)
 		}
+		if target != prev && !sawMoving {
+			t.Errorf("SetPosition(%d→%d): moving sentinel (-1) never observed during a cross-slot move", prev, target)
+		}
+		prev = target
 	}
 
 	// While stationary, Position must be a valid slot index in [0, len(Names)-1].
@@ -89,7 +94,7 @@ func CheckFilterWheel(t *testing.T, c *client.FilterWheel) {
 
 	// Position Set validation: out-of-range slots must be rejected as InvalidValue.
 	for _, bad := range []int{len(names), -1} {
-		if err := c.SetPosition(bad); !errors.Is(err, alpacadev.ErrInvalidValue) {
+		if err := c.SetPosition(bad); !errors.Is(err, server.ErrInvalidValue) {
 			t.Errorf("SetPosition(%d): want InvalidValue, got %v", bad, err)
 		}
 	}
@@ -99,17 +104,26 @@ func CheckFilterWheel(t *testing.T, c *client.FilterWheel) {
 // sentinel (-1) and returns the settled slot. Fails the test on timeout.
 func filterWheelWaitArrived(t *testing.T, c *client.FilterWheel) int {
 	t.Helper()
-	deadline := time.Now().Add(filterWheelMoveTimeout)
+	p, _ := filterWheelWaitArrivedObserved(t, c)
+	return p
+}
+
+// filterWheelWaitArrivedObserved is filterWheelWaitArrived, also reporting
+// whether the moving sentinel was observed at least once before arrival.
+func filterWheelWaitArrivedObserved(t *testing.T, c *client.FilterWheel) (slot int, sawMoving bool) {
+	t.Helper()
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		p, err := c.Position()
 		if err != nil {
 			t.Fatalf("Position(): %v", err)
 		}
 		if p != filterWheelMoving {
-			return p
+			return p, sawMoving
 		}
+		sawMoving = true
 		time.Sleep(15 * time.Millisecond)
 	}
-	t.Fatalf("filter wheel still moving after %v", filterWheelMoveTimeout)
-	return filterWheelMoving
+	t.Fatalf("filter wheel still moving after %v", SettleTimeout)
+	return filterWheelMoving, sawMoving
 }

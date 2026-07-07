@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // focuserPositionTolerance is the arrival tolerance in steps. ConformU allows a
@@ -28,7 +28,7 @@ func CheckFocuser(t *testing.T, f *client.Focuser) {
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = f.SetConnected(false)
-	if _, err := f.Position(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := f.Position(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Position() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := f.SetConnected(true); err != nil {
@@ -174,7 +174,7 @@ func CheckFocuser(t *testing.T, f *client.Focuser) {
 // timeout elapses.
 func focuserWaitStopped(t *testing.T, f *client.Focuser) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		m, err := f.IsMoving()
 		if err != nil {

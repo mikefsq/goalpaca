@@ -8,15 +8,15 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // rotatorClient hosts a sim Rotator on the real server (over httptest) and
 // returns a connected client pointed at it — exercising sim + server + client.
 func rotatorClient(t *testing.T, opts ...RotatorOption) *client.Rotator {
 	t.Helper()
-	srv := alpacadev.New(alpacadev.Config{Discovery: alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff}})
-	if err := srv.Register(alpacadev.RotatorType, 0, NewRotator(opts...)); err != nil {
+	srv := server.New(server.Config{Discovery: server.DiscoveryConfig{Mode: server.DiscoveryOff}})
+	if err := srv.Register(server.RotatorType, 0, NewRotator(opts...)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	ts := httptest.NewServer(srv)
@@ -67,10 +67,10 @@ func TestRotatorSimMoveAbsolute(t *testing.T) {
 
 func TestRotatorSimValidation(t *testing.T) {
 	rc := rotatorClient(t)
-	if err := rc.MoveAbsolute(400); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := rc.MoveAbsolute(400); !errors.Is(err, server.ErrInvalidValue) {
 		t.Fatalf("MoveAbsolute(400): want InvalidValue, got %v", err)
 	}
-	if err := rc.Move(400); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := rc.Move(400); !errors.Is(err, server.ErrInvalidValue) {
 		t.Fatalf("Move(400): want InvalidValue, got %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import "context"
 
@@ -10,7 +10,19 @@ func deviceGet(member string, d Device) (any, bool, error) {
 	case "connected":
 		return d.Connected(), true, nil
 	case "connecting":
-		return d.Connecting(), true, nil
+		// Platform 7: a client polls `connecting` for async Connect/Disconnect
+		// completion. If the operation has finished by FAILING, report the
+		// recorded error in-band — a bare false would be indistinguishable
+		// from "never connected".
+		if connecting := d.Connecting(); connecting {
+			return true, true, nil
+		}
+		if r, ok := d.(ConnectErrorReporter); ok {
+			if err := r.ConnectError(); err != nil {
+				return nil, true, err
+			}
+		}
+		return false, true, nil
 	case "name":
 		return d.Name(), true, nil
 	case "description":

@@ -1,10 +1,12 @@
-package alpacadev
+package server
 
 import "sync"
 
 // OpState is the lifecycle of an async ASCOM operation.
 type OpState int
 
+// The async-operation lifecycle states: not started, running, completed
+// successfully, and completed with an error.
 const (
 	OpIdle OpState = iota
 	OpBusy
@@ -22,13 +24,30 @@ type Op struct {
 	err   error
 }
 
-// Begin marks the operation in-flight. It is a no-op guard against starting an
-// already-busy op is the caller's responsibility (check Busy first if needed).
+// Begin marks the operation in-flight unconditionally; guarding against
+// starting an already-busy op is the caller's responsibility (use TryBegin for
+// an atomic check-and-start).
 func (o *Op) Begin() {
 	o.mu.Lock()
 	o.state = OpBusy
 	o.err = nil
 	o.mu.Unlock()
+}
+
+// TryBegin marks the operation in-flight if it is not already, reporting
+// whether it did. This is the atomic check-and-start an initiator needs to
+// reject a second start: the HTTP Busy gate checks Busy() before dispatching,
+// but two near-simultaneous initiators can both pass that check — a driver
+// that guards its initiator with TryBegin closes the race.
+func (o *Op) TryBegin() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.state == OpBusy {
+		return false
+	}
+	o.state = OpBusy
+	o.err = nil
+	return true
 }
 
 // Complete marks success.

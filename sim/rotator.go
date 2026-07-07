@@ -1,10 +1,3 @@
-// Package sim provides ASCOM Alpaca device simulators built on the goalpaca
-// server library. Each simulator is an ordinary driver (it implements the typed
-// device interface and embeds the matching Base type), but models realistic
-// behaviour — validated writes, connection gating, and time-based asynchronous
-// motion — so it passes ConformU and serves as a hardware-free test target and
-// a reference for driver authors. Behaviour mirrors the official
-// ASCOM.Alpaca.Simulators reference devices.
 package sim
 
 import (
@@ -12,14 +5,14 @@ import (
 	"sync"
 	"time"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Rotator is a simulated ASCOM Rotator. The position converges on the target at
 // a fixed rotation rate, computed from the clock (no background goroutine), wraps
 // 0–360°, and supports a sync offset between mechanical and sky position.
 type Rotator struct {
-	alpacadev.BaseRotator
+	server.BaseRotator
 
 	mu         sync.Mutex
 	rate       float64 // degrees per second
@@ -111,7 +104,11 @@ func (r *Rotator) TargetPosition() float64 {
 	return wrap360(r.target + r.syncOffset)
 }
 
-func (r *Rotator) Reverse() bool { return r.reverse }
+func (r *Rotator) Reverse() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reverse
+}
 
 func (r *Rotator) SetReverse(v bool) error {
 	r.mu.Lock()
@@ -133,9 +130,6 @@ func (r *Rotator) Halt() error {
 
 // MoveAbsolute slews to an absolute sky position (0 ≤ position < 360).
 func (r *Rotator) MoveAbsolute(position float64) error {
-	if position < 0 || position >= 360 {
-		return alpacadev.ErrInvalidValue
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.beginMoveLocked(position - r.syncOffset)
@@ -145,7 +139,7 @@ func (r *Rotator) MoveAbsolute(position float64) error {
 // Move slews by a relative offset (-360 < relative < 360).
 func (r *Rotator) Move(relative float64) error {
 	if relative <= -360 || relative >= 360 {
-		return alpacadev.ErrInvalidValue
+		return server.ErrInvalidValue
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -156,9 +150,6 @@ func (r *Rotator) Move(relative float64) error {
 // MoveMechanical slews to an absolute mechanical position (0 ≤ position < 360),
 // ignoring the sync offset.
 func (r *Rotator) MoveMechanical(position float64) error {
-	if position < 0 || position >= 360 {
-		return alpacadev.ErrInvalidValue
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.beginMoveLocked(position)
@@ -167,9 +158,6 @@ func (r *Rotator) MoveMechanical(position float64) error {
 
 // Sync sets the sync offset so the current position reads as the given sky angle.
 func (r *Rotator) Sync(position float64) error {
-	if position < 0 || position >= 360 {
-		return alpacadev.ErrInvalidValue
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.syncOffset = wrap360(position - r.currentMechanicalLocked())

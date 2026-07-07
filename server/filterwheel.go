@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // FilterWheel is the ASCOM FilterWheel interface (IFilterWheelV2/V3). Setting
 // Position initiates a move; Position reads -1 while moving.
@@ -39,6 +39,10 @@ func filterWheelPut(member string, fw FilterWheel, p params) (bool, error) {
 		n, err := p.reqInt("Position")
 		if err != nil {
 			return true, err
+		}
+		// IFilterWheelV2: the target slot must exist (0..N-1).
+		if slots := len(fw.Names()); n < 0 || n >= slots {
+			return true, invalidValuef("Position %d is outside the valid range 0 to %d", n, slots-1)
 		}
 		return true, fw.SetPosition(n)
 	}

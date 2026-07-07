@@ -6,13 +6,13 @@ import (
 	"net/url"
 	"testing"
 
-	alpaca "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // fakeFocuser is a minimal server-side Focuser for round-trip tests. It embeds
 // the library's BaseFocuser and overrides only what the tests touch.
 type fakeFocuser struct {
-	alpaca.BaseFocuser
+	server.BaseFocuser
 	pos int
 }
 
@@ -25,11 +25,11 @@ func (f *fakeFocuser) Move(p int) error       { f.pos = p; return nil }
 // focuser at device 0, so the client exercises the genuine wire protocol.
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := alpaca.New(alpaca.Config{Discovery: alpaca.DiscoveryConfig{Mode: alpaca.DiscoveryOff}})
+	srv := server.New(server.Config{Discovery: server.DiscoveryConfig{Mode: server.DiscoveryOff}})
 	foc := &fakeFocuser{}
 	foc.DevName = "FakeFocuser"
 	foc.IfaceVer = 4
-	if err := srv.Register(alpaca.FocuserType, 0, foc); err != nil {
+	if err := srv.Register(server.FocuserType, 0, foc); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	ts := httptest.NewServer(srv)
@@ -47,7 +47,7 @@ func TestFocuserRoundTrip(t *testing.T) {
 	}
 
 	// Operational members are gated until connected.
-	if _, err := f.Position(); !errors.Is(err, alpaca.ErrNotConnected) {
+	if _, err := f.Position(); !errors.Is(err, server.ErrNotConnected) {
 		t.Fatalf("Position() before connect: want NotConnected, got %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestFocuserRoundTrip(t *testing.T) {
 	}
 }
 
-// A device fault maps to *alpaca.AlpacaError and matches by number via errors.Is.
+// A device fault maps to *server.AlpacaError and matches by number via errors.Is.
 func TestErrorMapping(t *testing.T) {
 	ts := newServer(t)
 	f := NewFocuser(ts.URL, 0)
@@ -78,12 +78,12 @@ func TestErrorMapping(t *testing.T) {
 	}
 	// StepSize is a BaseFocuser default -> NotImplemented, carried in-band.
 	_, err := f.StepSize()
-	if !errors.Is(err, alpaca.ErrNotImplemented) {
+	if !errors.Is(err, server.ErrNotImplemented) {
 		t.Fatalf("StepSize(): want NotImplemented, got %v", err)
 	}
-	var ae *alpaca.AlpacaError
-	if !errors.As(err, &ae) || ae.Number != alpaca.ErrNumNotImplemented {
-		t.Fatalf("StepSize(): want AlpacaError %#x, got %v", alpaca.ErrNumNotImplemented, err)
+	var ae *server.AlpacaError
+	if !errors.As(err, &ae) || ae.Number != server.ErrNumNotImplemented {
+		t.Fatalf("StepSize(): want AlpacaError %#x, got %v", server.ErrNumNotImplemented, err)
 	}
 }
 

@@ -4,17 +4,20 @@ import (
 	"fmt"
 	"sync"
 
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // Switch is a simulated ASCOM Switch with N analog switches (value 0–100, the
-// boolean view is value > 0).
+// boolean view is value > 0). The server library validates the switch Id and
+// value ranges and gates the async members on CanAsync before ever calling
+// into this type, so it implements only the simulated hardware behavior.
 type Switch struct {
-	alpacadev.BaseSwitch
+	server.BaseSwitch
 
 	mu     sync.Mutex
 	n      int
 	values []float64
+	names  []string
 }
 
 // SwitchOption configures a simulated Switch.
@@ -40,76 +43,44 @@ func NewSwitch(opts ...SwitchOption) *Switch {
 	return s
 }
 
-func (s *Switch) valid(id int) bool { return id >= 0 && id < s.n }
-
 func (s *Switch) MaxSwitch() int { return s.n }
 
-func (s *Switch) CanWrite(id int) (bool, error) {
-	if !s.valid(id) {
-		return false, alpacadev.ErrInvalidValue
-	}
-	return true, nil
-}
+func (s *Switch) CanWrite(int) (bool, error) { return true, nil }
 
 func (s *Switch) GetSwitch(id int) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.valid(id) {
-		return false, alpacadev.ErrInvalidValue
-	}
 	return s.values[id] > 0, nil
 }
 
 func (s *Switch) GetSwitchName(id int) (string, error) {
-	if !s.valid(id) {
-		return "", alpacadev.ErrInvalidValue
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.names != nil && s.names[id] != "" {
+		return s.names[id], nil
 	}
 	return fmt.Sprintf("Switch %d", id), nil
 }
 
 func (s *Switch) GetSwitchDescription(id int) (string, error) {
-	if !s.valid(id) {
-		return "", alpacadev.ErrInvalidValue
-	}
 	return fmt.Sprintf("Simulated switch %d", id), nil
 }
 
 func (s *Switch) GetSwitchValue(id int) (float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.valid(id) {
-		return 0, alpacadev.ErrInvalidValue
-	}
 	return s.values[id], nil
 }
 
-func (s *Switch) MaxSwitchValue(id int) (float64, error) {
-	if !s.valid(id) {
-		return 0, alpacadev.ErrInvalidValue
-	}
-	return 100, nil
-}
+func (s *Switch) MaxSwitchValue(int) (float64, error) { return 100, nil }
 
-func (s *Switch) MinSwitchValue(id int) (float64, error) {
-	if !s.valid(id) {
-		return 0, alpacadev.ErrInvalidValue
-	}
-	return 0, nil
-}
+func (s *Switch) MinSwitchValue(int) (float64, error) { return 0, nil }
 
-func (s *Switch) SwitchStep(id int) (float64, error) {
-	if !s.valid(id) {
-		return 0, alpacadev.ErrInvalidValue
-	}
-	return 1, nil
-}
+func (s *Switch) SwitchStep(int) (float64, error) { return 1, nil }
 
 func (s *Switch) SetSwitch(id int, state bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.valid(id) {
-		return alpacadev.ErrInvalidValue
-	}
 	if state {
 		s.values[id] = 100
 	} else {
@@ -118,22 +89,55 @@ func (s *Switch) SetSwitch(id int, state bool) error {
 	return nil
 }
 
-func (s *Switch) SetSwitchName(id int, _ string) error {
-	if !s.valid(id) {
-		return alpacadev.ErrInvalidValue
+// SetSwitchName stores the name; ConformU sets one and verifies the readback.
+func (s *Switch) SetSwitchName(id int, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.names == nil {
+		s.names = make([]string, s.n)
 	}
+	s.names[id] = name
 	return nil
 }
 
 func (s *Switch) SetSwitchValue(id int, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.valid(id) {
-		return alpacadev.ErrInvalidValue
-	}
-	if value < 0 || value > 100 {
-		return alpacadev.ErrInvalidValue
-	}
 	s.values[id] = value
 	return nil
+}
+
+// --- ISwitchV3 async members ---
+//
+// This simulator has no asynchronous switches: CanAsync is false for every
+// id, so the server library rejects SetAsync/SetAsyncValue/CancelAsync with
+// NotImplemented before calling these.
+
+func (s *Switch) CanAsync(int) (bool, error) { return false, nil }
+
+// StateChangeComplete reports true for every switch: no async operation is
+// ever in flight on this simulator.
+func (s *Switch) StateChangeComplete(int) (bool, error) { return true, nil }
+
+func (s *Switch) SetAsync(int, bool) error { return server.ErrNotImplemented }
+
+func (s *Switch) SetAsyncValue(int, float64) error { return server.ErrNotImplemented }
+
+func (s *Switch) CancelAsync(int) error { return server.ErrNotImplemented }
+
+// DeviceState publishes the per-switch operational values (merged onto the
+// library-built set): ISwitchV3 defines GetSwitchN / GetSwitchValueN /
+// StateChangeCompleteN entries per switch id.
+func (s *Switch) DeviceState() []server.StateValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sv := make([]server.StateValue, 0, 3*s.n)
+	for i := 0; i < s.n; i++ {
+		sv = append(sv,
+			server.StateValue{Name: fmt.Sprintf("GetSwitch%d", i), Value: s.values[i] > 0},
+			server.StateValue{Name: fmt.Sprintf("GetSwitchValue%d", i), Value: s.values[i]},
+			server.StateValue{Name: fmt.Sprintf("StateChangeComplete%d", i), Value: true},
+		)
+	}
+	return sv
 }

@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // Platform 7 InterfaceVersion values — the version a driver implementing the
 // full Platform 7 contract should report from InterfaceVersion() for each

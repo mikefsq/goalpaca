@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"net/http"
@@ -80,7 +80,7 @@ func (s *Server) handleDeviceAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := parseParams(r)
+	p := parseParams(r, s.cfg.StrictParamCasing)
 	serverTx := s.tx.next()
 
 	switch r.Method {
@@ -123,6 +123,15 @@ var interruptMembers = map[string]bool{
 	// here: with a nonzero rate it INITIATES motion, and the gate exists to stop a second
 	// initiator clobbering one in progress; AbortSlew is the interrupt that stops a move.
 	"abortslew": true,
+	// HaltCover is the interrupt for cover motion (OpenCover/CloseCover set
+	// CoverMoving → Busy); CalibratorOff ends a CalibratorOn ramp
+	// (CalibratorChanging → Busy) and is the safety path for turning the light
+	// off — both must reach a busy CoverCalibrator.
+	"haltcover":     true,
+	"calibratoroff": true,
+	// CancelAsync is ISwitchV3's interrupt for an in-flight SetAsync/SetAsyncValue
+	// state change (StateChangeComplete false → Busy).
+	"cancelasync": true,
 }
 
 // passthroughMembers are the raw vendor command passthroughs (ASCOM Command*). They
@@ -310,8 +319,8 @@ func typePut(devType DeviceType, member string, dev Device, p params) (bool, err
 }
 
 // handleImage serves the camera image. With Accept: application/imagebytes it
-// returns the binary ImageBytes transport; otherwise it refuses (ImageArray
-// JSON is a last-resort fallback not implemented in this build — see spec §6.4).
+// returns the binary ImageBytes transport; otherwise it streams the standard
+// JSON ImageArray form — the mandatory baseline transport (spec §6.4).
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, dev Device, p params, serverTx uint32) {
 	c, ok := dev.(Camera)
 	if !ok {
@@ -320,7 +329,15 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, dev Device,
 	}
 	wantBytes := strings.Contains(strings.ToLower(r.Header.Get("Accept")), ImageBytesMIME)
 
-	frame, err := c.ImageFrame()
+	// ICameraV4: reading the image while ImageReady is false is an
+	// InvalidOperation, regardless of what the driver's ImageFrame does.
+	var frame ImageFrame
+	err := error(nil)
+	if !c.ImageReady() {
+		err = invalidOpErr("there is no image available: ImageReady is false")
+	} else {
+		frame, err = c.ImageFrame()
+	}
 	if err != nil {
 		if wantBytes {
 			num, msg := ErrorNumberFor(err)
@@ -333,10 +350,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, dev Device,
 	}
 
 	if !wantBytes {
-		// JSON ImageArray not supported in this build.
-		writeValue(w, nil, NewError(ErrNumNotImplemented,
-			"ImageArray JSON not supported; request Accept: application/imagebytes"),
-			p.clientTransactionID, serverTx)
+		writeImageArrayJSON(w, frame, p.clientTransactionID, serverTx)
 		return
 	}
 
@@ -356,9 +370,14 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request, dev Device,
 	}
 }
 
-// handleManagement serves the /management endpoints.
+// handleManagement serves the /management endpoints. The spec defines them as
+// GET-only (ConformU's protocol mode probes them with wrong methods).
 func (s *Server) handleManagement(w http.ResponseWriter, r *http.Request) {
-	p := parseParams(r)
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	p := parseParams(r, s.cfg.StrictParamCasing)
 	serverTx := s.tx.next()
 
 	switch r.URL.Path {

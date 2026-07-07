@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 import (
 	"context"
@@ -57,7 +57,7 @@ func (s *Server) runDirectDiscovery(ctx context.Context) {
 	// IPv4 broadcast responder.
 	lc := net.ListenConfig{Control: reuseControl}
 	if pc, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", alpacaDiscoveryPort)); err != nil {
-		fmt.Printf("alpacadev: direct discovery (IPv4) listen failed: %v\n", err)
+		s.logf("goalpaca: direct discovery (IPv4) listen failed: %v", err)
 	} else {
 		go s.serveDiscovery(ctx, pc.(*net.UDPConn))
 	}
@@ -66,7 +66,7 @@ func (s *Server) runDirectDiscovery(ctx context.Context) {
 	if s.cfg.Discovery.EnableIPv6 {
 		gaddr := &net.UDPAddr{IP: net.ParseIP(alpacaV6Group), Port: alpacaDiscoveryPort}
 		if c6, err := net.ListenMulticastUDP("udp6", nil, gaddr); err != nil {
-			fmt.Printf("alpacadev: direct discovery (IPv6) join failed: %v\n", err)
+			s.logf("goalpaca: direct discovery (IPv6) join failed: %v", err)
 		} else {
 			go s.serveDiscovery(ctx, c6)
 		}
@@ -84,7 +84,7 @@ func (s *Server) serveDiscovery(ctx context.Context, conn *net.UDPConn) {
 		_ = conn.Close() // unblock ReadFromUDP on shutdown
 	}()
 
-	resp, _ := json.Marshal(directResponse{AlpacaPort: s.cfg.AlpacaPort})
+	resp, _ := json.Marshal(directResponse{AlpacaPort: s.advertisedPort()})
 	buf := make([]byte, 1024)
 	for {
 		n, from, err := conn.ReadFromUDP(buf)
@@ -92,6 +92,9 @@ func (s *Server) serveDiscovery(ctx context.Context, conn *net.UDPConn) {
 			if ctx.Err() != nil {
 				return // shutting down
 			}
+			// Back off briefly: a persistent read error (e.g. a closed or
+			// broken socket that isn't the shutdown path) must not busy-spin.
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		if strings.HasPrefix(strings.ToLower(string(buf[:n])), discoveryProbe) {
@@ -104,17 +107,17 @@ func (s *Server) serveDiscovery(ctx context.Context, conn *net.UDPConn) {
 // configured discovery server. Never broadcasts.
 func (s *Server) runRegisterDiscovery(ctx context.Context) {
 	if s.cfg.Discovery.ServerAddr == "" {
-		fmt.Printf("alpacadev: register discovery has no ServerAddr; disabled\n")
+		s.logf("goalpaca: register discovery has no ServerAddr; disabled")
 		return
 	}
 	raddr, err := net.ResolveUDPAddr("udp", s.cfg.Discovery.ServerAddr)
 	if err != nil {
-		fmt.Printf("alpacadev: register discovery resolve failed: %v\n", err)
+		s.logf("goalpaca: register discovery resolve failed: %v", err)
 		return
 	}
 	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
-		fmt.Printf("alpacadev: register discovery dial failed: %v\n", err)
+		s.logf("goalpaca: register discovery dial failed: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -139,11 +142,21 @@ func (s *Server) sendHeartbeats(conn *net.UDPConn) {
 	s.mu.RUnlock()
 	for _, rd := range order {
 		hb, _ := json.Marshal(heartbeat{
-			AlpacaPort: s.cfg.AlpacaPort,
+			AlpacaPort: s.advertisedPort(),
 			UniqueID:   rd.dev.UniqueID(),
 			DeviceType: string(rd.typ),
 			DeviceName: rd.dev.Name(),
 		})
 		_, _ = conn.Write(hb)
 	}
+}
+
+// advertisedPort is the port discovery responses and heartbeats carry: the
+// actual bound port once Run has bound (covers Config.AlpacaPort 0), else the
+// configured one.
+func (s *Server) advertisedPort() int {
+	if p := s.Port(); p != 0 {
+		return p
+	}
+	return s.cfg.AlpacaPort
 }

@@ -1,11 +1,15 @@
-package alpacadev
+package server
 
 import "time"
 
 // deviceStateValues builds the Platform 7 DeviceState operational-property set
 // for a device, appending the mandatory ISO-8601 UTC TimeStamp. The library
 // composes this from the typed interface getters, so a driver gets a correct
-// DeviceState for free (it need not implement DeviceState itself).
+// DeviceState for free (it need not implement DeviceState itself) — then the
+// driver's own DeviceState() is merged in: entries override library-built
+// values by name, new names are appended. That is how a driver publishes state
+// the library cannot derive (per-switch values, vendor extras) or corrects a
+// built entry.
 //
 // Properties whose getter returns an error (e.g. NotImplemented) are omitted,
 // matching ASCOM's rule that DeviceState carries only supported operational
@@ -60,11 +64,37 @@ func deviceStateValues(devType DeviceType, dev Device) []StateValue {
 		}
 	}
 
-	if sv == nil {
-		// Unknown/custom type: fall back to the device's own DeviceState.
-		sv = dev.DeviceState()
+	// Merge the driver's own DeviceState on top of the built set. For an
+	// unknown/custom type (sv == nil) this is the whole response.
+	sv = mergeStateValues(sv, dev.DeviceState())
+
+	// The library supplies the mandatory TimeStamp unless the driver already
+	// did (e.g. a hardware-stamped snapshot).
+	for _, v := range sv {
+		if v.Name == "TimeStamp" {
+			return sv
+		}
 	}
 	return append(sv, StateValue{Name: "TimeStamp", Value: nowISO8601()})
+}
+
+// mergeStateValues overlays extra onto built: same-name entries replace the
+// built value in place, new names append in extra's order.
+func mergeStateValues(built, extra []StateValue) []StateValue {
+	for _, e := range extra {
+		replaced := false
+		for i := range built {
+			if built[i].Name == e.Name {
+				built[i] = e
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			built = append(built, e)
+		}
+	}
+	return built
 }
 
 func nowISO8601() string {
@@ -171,14 +201,9 @@ func telescopeStateValues(t Telescope) []StateValue {
 		{Name: "Slewing", Value: t.Slewing()},
 		{Name: "Tracking", Value: t.Tracking()},
 		{Name: "UTCDate", Value: t.UTCDate()},
-		// Operational rate values beyond the standard ASCOM telescope DeviceState set.
-		// Not mandated, but cheap to include and consumed from the batch by generic
-		// clients (the NINA 10Micron plugin path) that would otherwise GET each one per
-		// poll cycle; clients that don't recognise them ignore the extra entries.
-		{Name: "GuideRateRightAscension", Value: t.GuideRateRightAscension()},
-		{Name: "GuideRateDeclination", Value: t.GuideRateDeclination()},
-		{Name: "RightAscensionRate", Value: t.RightAscensionRate()},
-		{Name: "DeclinationRate", Value: t.DeclinationRate()},
-		{Name: "TrackingRate", Value: int(t.TrackingRate())},
+		// Only the ASCOM-defined operational set: ConformU flags extra
+		// entries as issues. A driver that wants rate values batched for a
+		// specific client (e.g. the NINA 10Micron plugin) can add them via
+		// its own DeviceState() override, which is merged on top.
 	}
 }

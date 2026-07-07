@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // telescopeRATolerance is the slew arrival tolerance for right ascension (hours).
@@ -24,13 +24,13 @@ const telescopeDecTolerance = 0.5
 //
 // Skipped (the sim does not model these, so ConformU's corresponding checks are
 // intentionally omitted): alt/az slew arrival accuracy, precise side-of-pier
-// flip semantics, refraction effects, guide-rate precision, and MoveAxis motion.
+// flip semantics, refraction effects, and guide-rate precision.
 func CheckTelescope(t *testing.T, c *client.Telescope) {
 	t.Helper()
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.RightAscension(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.RightAscension(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("RightAscension() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -50,12 +50,12 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	// Enum-typed properties must be readable.
 	if mode, err := c.AlignmentMode(); err != nil {
 		t.Errorf("AlignmentMode(): %v", err)
-	} else if mode != alpacadev.AlignGermanPolar {
+	} else if mode != server.AlignGermanPolar {
 		t.Errorf("AlignmentMode() = %v; want AlignGermanPolar", mode)
 	}
 	if sys, err := c.EquatorialSystem(); err != nil {
 		t.Errorf("EquatorialSystem(): %v", err)
-	} else if sys != alpacadev.EquJ2000 {
+	} else if sys != server.EquJ2000 {
 		t.Errorf("EquatorialSystem() = %v; want EquJ2000", sys)
 	}
 	if _, err := c.SideOfPier(); err != nil {
@@ -82,6 +82,19 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 		t.Errorf("Tracking() after disable = %v, %v; want false", on, err)
 	}
 
+	// Target read-before-set: on a fresh device, reading a target (or slewing
+	// to it) before one is established must fault InvalidOperation — the ASCOM
+	// read-before-set rule ConformU checks at the start of its target tests.
+	if _, err := c.TargetRightAscension(); !errors.Is(err, server.ErrInvalidOperation) {
+		t.Errorf("TargetRightAscension() before set: want InvalidOperation, got %v", err)
+	}
+	if _, err := c.TargetDeclination(); !errors.Is(err, server.ErrInvalidOperation) {
+		t.Errorf("TargetDeclination() before set: want InvalidOperation, got %v", err)
+	}
+	if err := c.SlewToTargetAsync(); !errors.Is(err, server.ErrInvalidOperation) {
+		t.Errorf("SlewToTargetAsync() before target set: want InvalidOperation, got %v", err)
+	}
+
 	// Target RA/Dec round-trip, then out-of-range rejections.
 	if err := c.SetTargetRightAscension(5); err != nil {
 		t.Errorf("SetTargetRightAscension(5): %v", err)
@@ -95,10 +108,10 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if dec, err := c.TargetDeclination(); err != nil || telescopeAbs(dec-20) > telescopeDecTolerance {
 		t.Errorf("TargetDeclination() = %v, %v; want ~20", dec, err)
 	}
-	if err := c.SetTargetRightAscension(30); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetTargetRightAscension(30); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetTargetRightAscension(30): want InvalidValue, got %v", err)
 	}
-	if err := c.SetTargetDeclination(100); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetTargetDeclination(100); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetTargetDeclination(100): want InvalidValue, got %v", err)
 	}
 
@@ -114,7 +127,7 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 			t.Errorf("Declination() after slew = %v, %v; want ~25", dec, err)
 		}
 	}
-	if err := c.SlewToCoordinatesAsync(30, 0); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SlewToCoordinatesAsync(30, 0); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SlewToCoordinatesAsync(30, 0): want InvalidValue, got %v", err)
 	}
 
@@ -138,6 +151,23 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 		if parked, err := c.AtPark(); err != nil || !parked {
 			t.Errorf("AtPark() after park = %v, %v; want true", parked, err)
 		}
+
+		// While parked, every movement command must raise ParkedException
+		// (0x408) — ConformU's Park test attempts each of these.
+		wantParked := func(name string, err error) {
+			if !errors.Is(err, server.ErrParked) {
+				t.Errorf("%s while parked: want Parked (0x408), got %v", name, err)
+			}
+		}
+		wantParked("AbortSlew", c.AbortSlew())
+		wantParked("SlewToCoordinatesAsync", c.SlewToCoordinatesAsync(12, 45))
+		wantParked("SlewToAltAzAsync", c.SlewToAltAzAsync(180, 45))
+		wantParked("SyncToCoordinates", c.SyncToCoordinates(12, 45))
+		wantParked("SyncToAltAz", c.SyncToAltAz(180, 45))
+		wantParked("MoveAxis", c.MoveAxis(server.AxisPrimary, 1))
+		wantParked("PulseGuide", c.PulseGuide(server.GuideNorth, 10))
+		wantParked("FindHome", c.FindHome())
+		wantParked("SetTracking(true)", c.SetTracking(true))
 	}
 	if err := c.Unpark(); err != nil {
 		t.Errorf("Unpark(): %v", err)
@@ -175,7 +205,7 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if elev, err := c.SiteElevation(); err != nil || telescopeAbs(elev-1600) > 1 {
 		t.Errorf("SiteElevation() = %v, %v; want ~1600", elev, err)
 	}
-	if err := c.SetSiteLatitude(200); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSiteLatitude(200); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSiteLatitude(200): want InvalidValue, got %v", err)
 	}
 
@@ -186,19 +216,55 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if err := c.SetUTCDate("2024-01-02T03:04:05.000Z"); err != nil {
 		t.Errorf("SetUTCDate(valid): %v", err)
 	}
-	if err := c.SetUTCDate("not-a-date"); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetUTCDate("not-a-date"); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetUTCDate(invalid): want InvalidValue, got %v", err)
 	}
 
 	// Axis capability and rates.
-	if can, err := c.CanMoveAxis(alpacadev.AxisPrimary); err != nil || !can {
+	if can, err := c.CanMoveAxis(server.AxisPrimary); err != nil || !can {
 		t.Errorf("CanMoveAxis(AxisPrimary) = %v, %v; want true", can, err)
 	}
-	if can, err := c.CanMoveAxis(alpacadev.AxisTertiary); err != nil || can {
+	if can, err := c.CanMoveAxis(server.AxisTertiary); err != nil || can {
 		t.Errorf("CanMoveAxis(AxisTertiary) = %v, %v; want false", can, err)
 	}
-	if rates, err := c.AxisRates(alpacadev.AxisPrimary); err != nil || len(rates) == 0 {
+	if rates, err := c.AxisRates(server.AxisPrimary); err != nil || len(rates) == 0 {
 		t.Errorf("AxisRates(AxisPrimary) = %v, %v; want non-empty", rates, err)
+	}
+
+	// MoveAxis motion: applying a nonzero rate must report Slewing and move
+	// the axis; rate 0 (and AbortSlew) must stop it. ConformU's MoveAxis test
+	// verifies exactly this.
+	raBefore, err := c.RightAscension()
+	if err != nil {
+		t.Fatalf("RightAscension() before MoveAxis: %v", err)
+	}
+	if err := c.MoveAxis(server.AxisPrimary, 1.0); err != nil {
+		t.Errorf("MoveAxis(AxisPrimary, 1.0): %v", err)
+	} else {
+		if slewing, err := c.Slewing(); err != nil || !slewing {
+			t.Errorf("Slewing() during MoveAxis = %v, %v; want true", slewing, err)
+		}
+		time.Sleep(150 * time.Millisecond)                        // let the axis accumulate motion
+		if err := c.MoveAxis(server.AxisPrimary, 0); err != nil { // rate 0 stops the axis
+			t.Errorf("MoveAxis(AxisPrimary, 0): %v", err)
+		}
+		if slewing, err := c.Slewing(); err != nil || slewing {
+			t.Errorf("Slewing() after MoveAxis(0) = %v, %v; want false", slewing, err)
+		}
+		if raAfter, err := c.RightAscension(); err != nil || raAfter == raBefore {
+			t.Errorf("RightAscension() after MoveAxis = %v, %v; want changed from %v", raAfter, err, raBefore)
+		}
+		// AbortSlew is the general interrupt: start a move and abort it.
+		if err := c.MoveAxis(server.AxisSecondary, 1.0); err != nil {
+			t.Errorf("MoveAxis(AxisSecondary, 1.0): %v", err)
+		} else {
+			if err := c.AbortSlew(); err != nil {
+				t.Errorf("AbortSlew() during MoveAxis: %v", err)
+			}
+			if slewing, err := c.Slewing(); err != nil || slewing {
+				t.Errorf("Slewing() after AbortSlew = %v, %v; want false", slewing, err)
+			}
+		}
 	}
 
 	// DestinationSideOfPier returns a value without error.
@@ -215,7 +281,7 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	telescopeAssertCan(t, "CanSlewAltAz", c.CanSlewAltAz)
 	telescopeAssertCan(t, "CanSlewAltAzAsync", c.CanSlewAltAzAsync)
 	telescopeAssertCan(t, "CanSyncAltAz", c.CanSyncAltAz)
-	if can, err := c.CanMoveAxis(alpacadev.AxisSecondary); err != nil || !can {
+	if can, err := c.CanMoveAxis(server.AxisSecondary); err != nil || !can {
 		t.Errorf("CanMoveAxis(AxisSecondary) = %v, %v; want true", can, err)
 	}
 
@@ -258,10 +324,10 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if gd, err := c.GuideRateDeclination(); err != nil || telescopeAbs(gd-0.5) > 1e-6 {
 		t.Errorf("GuideRateDeclination() after set = %v, %v; want ~0.5", gd, err)
 	}
-	if err := c.SetGuideRateRightAscension(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetGuideRateRightAscension(-1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetGuideRateRightAscension(-1): want InvalidValue, got %v", err)
 	}
-	if err := c.SetGuideRateDeclination(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetGuideRateDeclination(-1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetGuideRateDeclination(-1): want InvalidValue, got %v", err)
 	}
 
@@ -313,18 +379,18 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if err := c.SetSlewSettleTime(0); err != nil {
 		t.Errorf("SetSlewSettleTime(0): %v", err)
 	}
-	if err := c.SetSlewSettleTime(-1); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSlewSettleTime(-1); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSlewSettleTime(-1): want InvalidValue, got %v", err)
 	}
 
 	// TrackingRate write round-trip, then restore.
-	if err := c.SetTrackingRate(alpacadev.DriveLunar); err != nil {
+	if err := c.SetTrackingRate(server.DriveLunar); err != nil {
 		t.Errorf("SetTrackingRate(DriveLunar): %v", err)
 	}
-	if tr, err := c.TrackingRate(); err != nil || tr != alpacadev.DriveLunar {
+	if tr, err := c.TrackingRate(); err != nil || tr != server.DriveLunar {
 		t.Errorf("TrackingRate() after set = %v, %v; want DriveLunar", tr, err)
 	}
-	if err := c.SetTrackingRate(alpacadev.DriveSidereal); err != nil {
+	if err := c.SetTrackingRate(server.DriveSidereal); err != nil {
 		t.Errorf("SetTrackingRate(DriveSidereal): %v", err)
 	}
 
@@ -334,7 +400,7 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if eerr != nil || werr != nil {
 		t.Errorf("DestinationSideOfPier: %v, %v", eerr, werr)
 	}
-	if east == alpacadev.PierUnknown || west == alpacadev.PierUnknown {
+	if east == server.PierUnknown || west == server.PierUnknown {
 		t.Errorf("DestinationSideOfPier = %v, %v; neither should be PierUnknown", east, west)
 	}
 	if east == west {
@@ -415,16 +481,16 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	}
 
 	// Out-of-range sync/site rejections.
-	if err := c.SyncToCoordinates(30, 0); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SyncToCoordinates(30, 0); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SyncToCoordinates(30, 0): want InvalidValue, got %v", err)
 	}
-	if err := c.SetSiteLongitude(200); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSiteLongitude(200); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSiteLongitude(200): want InvalidValue, got %v", err)
 	}
-	if err := c.SetSiteElevation(-1000); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSiteElevation(-1000); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSiteElevation(-1000): want InvalidValue, got %v", err)
 	}
-	if err := c.SetSiteElevation(99999); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SetSiteElevation(99999); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SetSiteElevation(99999): want InvalidValue, got %v", err)
 	}
 
@@ -432,12 +498,12 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	if guiding, err := c.IsPulseGuiding(); err != nil || guiding {
 		t.Errorf("IsPulseGuiding() = %v, %v; want false", guiding, err)
 	}
-	if err := c.PulseGuide(alpacadev.GuideNorth, 100); err != nil {
+	if err := c.PulseGuide(server.GuideNorth, 100); err != nil {
 		t.Errorf("PulseGuide(GuideNorth, 100): %v", err)
 	}
 
 	// AxisRates bounds for the primary axis.
-	if rates, err := c.AxisRates(alpacadev.AxisPrimary); err != nil {
+	if rates, err := c.AxisRates(server.AxisPrimary); err != nil {
 		t.Errorf("AxisRates(AxisPrimary): %v", err)
 	} else {
 		for i, r := range rates {
@@ -462,7 +528,7 @@ func telescopeAssertCan(t *testing.T, name string, read func() (bool, error)) {
 // telescopeWaitSlewDone polls Slewing() until it reports false or times out.
 func telescopeWaitSlewDone(t *testing.T, c *client.Telescope) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		slewing, err := c.Slewing()
 		if err != nil {
@@ -479,7 +545,7 @@ func telescopeWaitSlewDone(t *testing.T, c *client.Telescope) {
 // telescopeWaitHome polls AtHome() until it reports true or times out.
 func telescopeWaitHome(t *testing.T, c *client.Telescope) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		home, err := c.AtHome()
 		if err != nil {

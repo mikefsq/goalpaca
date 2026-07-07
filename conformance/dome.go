@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/mikefsq/goalpaca/client"
-	alpacadev "github.com/mikefsq/goalpaca/server"
+	"github.com/mikefsq/goalpaca/server"
 )
 
 // domePositionTolerance is the arrival tolerance in degrees for azimuth and
@@ -17,13 +17,14 @@ const domePositionTolerance = 2.0
 // ConformU's DomeTester (CheckProperties / CheckMethods): NotConnected gating,
 // capability flag readability and expected values, azimuth/altitude slew arrival
 // with out-of-range → InvalidValue, SyncToAzimuth, the shutter open/close state
-// machine, Slaved read/write, and FindHome/Park/AbortSlew.
+// machine with Slewing() true during shutter motion (IDomeV3), Slaved
+// read/write, and FindHome/Park/AbortSlew.
 func CheckDome(t *testing.T, c *client.Dome) {
 	t.Helper()
 
 	// NotConnected gating: an operational member must fault while disconnected.
 	_ = c.SetConnected(false)
-	if _, err := c.Azimuth(); !errors.Is(err, alpacadev.ErrNotConnected) {
+	if _, err := c.Azimuth(); !errors.Is(err, server.ErrNotConnected) {
 		t.Errorf("Azimuth() while disconnected: want NotConnected, got %v", err)
 	}
 	if err := c.SetConnected(true); err != nil {
@@ -60,10 +61,10 @@ func CheckDome(t *testing.T, c *client.Dome) {
 			t.Errorf("SlewToAzimuth(90): Azimuth = %v, %v; want ~90", az, err)
 		}
 	}
-	if err := c.SlewToAzimuth(400); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SlewToAzimuth(400); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SlewToAzimuth(400): want InvalidValue, got %v", err)
 	}
-	if err := c.SlewToAzimuth(-10); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SlewToAzimuth(-10); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SlewToAzimuth(-10): want InvalidValue, got %v", err)
 	}
 
@@ -76,10 +77,10 @@ func CheckDome(t *testing.T, c *client.Dome) {
 			t.Errorf("SlewToAltitude(45): Altitude = %v, %v; want ~45", alt, err)
 		}
 	}
-	if err := c.SlewToAltitude(100); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SlewToAltitude(100); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SlewToAltitude(100): want InvalidValue, got %v", err)
 	}
-	if err := c.SlewToAltitude(-10); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SlewToAltitude(-10); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SlewToAltitude(-10): want InvalidValue, got %v", err)
 	}
 
@@ -90,23 +91,31 @@ func CheckDome(t *testing.T, c *client.Dome) {
 	} else if az, err := c.Azimuth(); err != nil || angleDiff(az, 180) > domePositionTolerance {
 		t.Errorf("SyncToAzimuth(180): Azimuth = %v, %v; want ~180", az, err)
 	}
-	if err := c.SyncToAzimuth(400); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SyncToAzimuth(400); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SyncToAzimuth(400): want InvalidValue, got %v", err)
 	}
-	if err := c.SyncToAzimuth(-10); !errors.Is(err, alpacadev.ErrInvalidValue) {
+	if err := c.SyncToAzimuth(-10); !errors.Is(err, server.ErrInvalidValue) {
 		t.Errorf("SyncToAzimuth(-10): want InvalidValue, got %v", err)
 	}
 
-	// Shutter open/close state machine.
+	// Shutter open/close state machine. IDomeV3 requires Slewing to read true
+	// while any part of the dome is moving, including the shutter — not just
+	// azimuth/altitude motion.
 	if err := c.OpenShutter(); err != nil {
 		t.Errorf("OpenShutter(): %v", err)
 	} else {
-		domeWaitShutter(t, c, alpacadev.ShutterOpen)
+		if moving, err := c.Slewing(); err != nil || !moving {
+			t.Errorf("Slewing() during OpenShutter = %v, %v; want true", moving, err)
+		}
+		domeWaitShutter(t, c, server.ShutterOpen)
 	}
 	if err := c.CloseShutter(); err != nil {
 		t.Errorf("CloseShutter(): %v", err)
 	} else {
-		domeWaitShutter(t, c, alpacadev.ShutterClosed)
+		if moving, err := c.Slewing(); err != nil || !moving {
+			t.Errorf("Slewing() during CloseShutter = %v, %v; want true", moving, err)
+		}
+		domeWaitShutter(t, c, server.ShutterClosed)
 	}
 
 	// Slaved read/write: CanSlave is false so Slaved reads false, enabling slaving
@@ -114,7 +123,7 @@ func CheckDome(t *testing.T, c *client.Dome) {
 	if s, err := c.Slaved(); err != nil || s {
 		t.Errorf("Slaved() = %v, %v; want false", s, err)
 	}
-	if err := c.SetSlaved(true); !errors.Is(err, alpacadev.ErrNotImplemented) {
+	if err := c.SetSlaved(true); !errors.Is(err, server.ErrNotImplemented) {
 		t.Errorf("SetSlaved(true): want NotImplemented, got %v", err)
 	}
 	if err := c.SetSlaved(false); err != nil {
@@ -172,7 +181,7 @@ func CheckDome(t *testing.T, c *client.Dome) {
 // domeWaitSlewing polls Slewing until the dome is moving or the timeout elapses.
 func domeWaitSlewing(t *testing.T, c *client.Dome) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		moving, err := c.Slewing()
 		if err != nil {
@@ -190,7 +199,7 @@ func domeWaitSlewing(t *testing.T, c *client.Dome) {
 // elapses.
 func domeWaitStopped(t *testing.T, c *client.Dome) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		moving, err := c.Slewing()
 		if err != nil {
@@ -206,9 +215,9 @@ func domeWaitStopped(t *testing.T, c *client.Dome) {
 
 // domeWaitShutter polls ShutterStatus until it reaches want or the timeout
 // elapses.
-func domeWaitShutter(t *testing.T, c *client.Dome, want alpacadev.ShutterState) {
+func domeWaitShutter(t *testing.T, c *client.Dome, want server.ShutterState) {
 	t.Helper()
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(SettleTimeout)
 	for time.Now().Before(deadline) {
 		s, err := c.ShutterStatus()
 		if err != nil {

@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package alpacadev
+package server
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package alpacadev
+package server
 
 // Switch is the ASCOM Switch interface (ISwitchV3, Platform 7). Most members
 // are indexed by a switch Id (0..MaxSwitch-1), passed as the "Id" parameter,
@@ -78,65 +78,118 @@ func switchGet(member string, sw Switch, p params) (any, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
+	if err := validSwitchID(sw, id); err != nil {
+		return nil, true, err
+	}
 	v, err := fn(id)
 	return v, true, err
 }
 
+// validSwitchID enforces the ISwitchV3 rule that every Id-taking member
+// rejects an out-of-range Id (0..MaxSwitch-1) with InvalidValue, before any
+// other processing.
+func validSwitchID(sw Switch, id int) error {
+	if max := sw.MaxSwitch(); id < 0 || id >= max {
+		return invalidValuef("switch Id %d is outside the valid range 0 to %d", id, max-1)
+	}
+	return nil
+}
+
+// switchAsyncGate enforces the ISwitchV3 rule that the asynchronous members
+// (SetAsync, SetAsyncValue, CancelAsync) return NotImplemented for switches
+// whose CanAsync is false.
+func switchAsyncGate(sw Switch, id int, member string) error {
+	can, err := sw.CanAsync(id)
+	if err != nil {
+		return err
+	}
+	if !can {
+		return notImplErr(member)
+	}
+	return nil
+}
+
 func switchPut(member string, sw Switch, p params) (bool, error) {
+	// All Switch PUT members take an Id. Parameters are parsed first (a
+	// malformed request is a protocol error), then the Id is range-checked
+	// per ISwitchV3 before the driver is called.
+	switch member {
+	case "setswitch", "setswitchname", "setswitchvalue",
+		"setasync", "setasyncvalue", "cancelasync":
+	default:
+		return false, nil
+	}
+	id, err := p.reqInt("Id")
+	if err != nil {
+		return true, err
+	}
 	switch member {
 	case "setswitch":
-		id, err := p.reqInt("Id")
+		state, err := p.reqBool("State")
 		if err != nil {
 			return true, err
 		}
-		state, err := p.reqBool("State")
-		if err != nil {
+		if err := validSwitchID(sw, id); err != nil {
 			return true, err
 		}
 		return true, sw.SetSwitch(id, state)
 	case "setswitchname":
-		id, err := p.reqInt("Id")
-		if err != nil {
+		name, _ := p.get("Name")
+		if err := validSwitchID(sw, id); err != nil {
 			return true, err
 		}
-		name, _ := p.get("Name")
 		return true, sw.SetSwitchName(id, name)
 	case "setswitchvalue":
-		id, err := p.reqInt("Id")
-		if err != nil {
-			return true, err
-		}
 		value, err := p.reqFloat("Value")
 		if err != nil {
 			return true, err
 		}
-		return true, sw.SetSwitchValue(id, value)
-	case "setasync":
-		id, err := p.reqInt("Id")
-		if err != nil {
+		if err := validSwitchID(sw, id); err != nil {
 			return true, err
 		}
+		if min, err := sw.MinSwitchValue(id); err == nil {
+			if max, merr := sw.MaxSwitchValue(id); merr == nil && (value < min || value > max) {
+				return true, invalidValuef("switch %d value %g is outside the valid range %g to %g", id, value, min, max)
+			}
+		}
+		return true, sw.SetSwitchValue(id, value)
+	case "setasync":
 		state, err := p.reqBool("State")
 		if err != nil {
 			return true, err
 		}
-		return true, sw.SetAsync(id, state)
-	case "setasyncvalue":
-		id, err := p.reqInt("Id")
-		if err != nil {
+		if err := validSwitchID(sw, id); err != nil {
 			return true, err
 		}
+		if err := switchAsyncGate(sw, id, "SetAsync"); err != nil {
+			return true, err
+		}
+		return true, sw.SetAsync(id, state)
+	case "setasyncvalue":
 		value, err := p.reqFloat("Value")
 		if err != nil {
 			return true, err
 		}
+		if err := validSwitchID(sw, id); err != nil {
+			return true, err
+		}
+		if err := switchAsyncGate(sw, id, "SetAsyncValue"); err != nil {
+			return true, err
+		}
+		if min, err := sw.MinSwitchValue(id); err == nil {
+			if max, merr := sw.MaxSwitchValue(id); merr == nil && (value < min || value > max) {
+				return true, invalidValuef("switch %d value %g is outside the valid range %g to %g", id, value, min, max)
+			}
+		}
 		return true, sw.SetAsyncValue(id, value)
 	case "cancelasync":
-		id, err := p.reqInt("Id")
-		if err != nil {
+		if err := validSwitchID(sw, id); err != nil {
+			return true, err
+		}
+		if err := switchAsyncGate(sw, id, "CancelAsync"); err != nil {
 			return true, err
 		}
 		return true, sw.CancelAsync(id)
 	}
-	return false, nil
+	return true, nil // unreachable: member list checked above
 }
