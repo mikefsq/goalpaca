@@ -46,15 +46,24 @@ On a network with several servers, use `-discover-match` to disambiguate.
 
 With `-advertise`, the proxy also answers Alpaca UDP discovery (`:32227`) with
 its own `-listen` port, so it appears in a discovery tool as a selectable
-server. It **co-binds** the discovery port via `SO_REUSEPORT` rather than owning
-it, so the real device's own discovery keeps working and *both* show up in the
-list (same host IP, different ports) — you pick the proxy's port to route a
-session through the fault injector, or the real port to bypass it.
+server. It **co-binds** the discovery port rather than owning it, so the real
+device's own discovery keeps working and *both* show up in the list (same host
+IP, different ports) — you pick the proxy's port to route a session through the
+fault injector, or the real port to bypass it.
 
-Caveat: `SO_REUSEPORT` delivers a **broadcast** discovery probe to every
-co-bound responder (so both answer), but a **directed unicast** probe reaches
-only one of them. The usual "Discover" button broadcasts, so both appear; a
-tool that unicasts a specific host may see only one.
+The co-bind uses `SO_REUSEPORT` on Linux/macOS and `SO_REUSEADDR` on Windows
+(which, unlike its Unix namesake, genuinely shares a UDP port). On a platform
+with neither, the proxy logs that advertising is unavailable and runs normally —
+reach it by typed address.
+
+Caveat: port sharing delivers a **broadcast** discovery probe to every co-bound
+responder (so both answer), but a **directed unicast** probe reaches only one of
+them. The usual "Discover" button broadcasts, so both appear; a tool that
+unicasts a specific host may see only one.
+
+Note that even with `-advertise`, a **typed address remains the more reliable
+setup**: with both the proxy and the real device in the list it is easy to pick
+the real one by mistake and quietly bypass the fault injector.
 
 ## Fault menu
 

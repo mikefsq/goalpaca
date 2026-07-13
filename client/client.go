@@ -167,15 +167,45 @@ func normalizeBaseURL(address string) string {
 // zone delimiter '%' to be written as "%25"; a raw "%zone" is otherwise rejected by the URL
 // parser as an invalid escape, so link-local IPv6 servers (the ones Alpaca IPv6 discovery
 // finds) can't be reached. Addresses without a zone pass through unchanged.
+//
+// The zone body is percent-encoded too, not just the delimiter: RFC 6874 admits only
+// unreserved characters and pct-encoded octets in a ZoneID, and a zone is an interface
+// identifier whose form is platform-dependent. On Linux/BSD it is a short name ("eth0")
+// that needs no encoding, but on Windows it is the interface name — routinely with spaces,
+// e.g. "Ethernet Instance 0" — which the URL parser rejects outright ('invalid character
+// " " in host name'). Encoding the body keeps link-local discovery working there.
 func urlAuthority(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr // not host:port — leave as-is
 	}
 	if i := strings.IndexByte(host, '%'); i >= 0 {
-		host = host[:i] + "%25" + host[i+1:]
+		host = host[:i] + "%25" + escapeZoneID(host[i+1:])
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// URLAuthority is the exported form of urlAuthority, for callers outside this package that
+// build their own URLs from a dialable address — notably a discovered server's Address, which
+// carries an IPv6 zone verbatim from the OS. Embedding such an address in a URL without this
+// yields "invalid URL escape" (or, for a Windows zone, "invalid character in host name").
+func URLAuthority(addr string) string { return urlAuthority(addr) }
+
+// escapeZoneID percent-encodes an IPv6 zone identifier per RFC 6874, which allows only
+// unreserved characters (ALPHA / DIGIT / "-" / "." / "_" / "~") to appear literally.
+// Everything else — notably the spaces in a Windows interface name — becomes %XX.
+func escapeZoneID(zone string) string {
+	var b strings.Builder
+	for i := 0; i < len(zone); i++ { // byte-wise: a multi-byte rune encodes as its octets
+		switch c := zone[i]; {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '.', c == '_', c == '~':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 // prepare builds an Alpaca request with ClientID + an incrementing

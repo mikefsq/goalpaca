@@ -64,10 +64,11 @@
 //	fault_proxy -listen :11511 -discover -discover-match camera  # find the upstream by discovery
 //
 // With -advertise the proxy also answers Alpaca UDP discovery (:32227) with its
-// own port, co-binding via SO_REUSEPORT so it appears in a Discover list next to
-// the real device -- pick the proxy's port to route a session through the faults.
-// With -discover it finds its own upstream by discovery instead of -upstream
-// (optionally -discover-match <type> to choose among several servers).
+// own port, co-binding the port (SO_REUSEPORT on Linux/macOS, SO_REUSEADDR on Windows)
+// so it appears in a Discover list next to the real device -- pick the proxy's port to
+// route a session through the faults. With -discover it finds its own upstream by
+// discovery instead of -upstream (optionally -discover-match <type> to choose among
+// several servers).
 package main
 
 import (
@@ -101,13 +102,16 @@ const alpacaDiscoveryPort = 32227
 
 // runAdvertise answers Alpaca UDP discovery with the proxy's own HTTP port, so
 // the proxy shows up in a discovery tool as a selectable server. It co-binds the
-// discovery port via SO_REUSEPORT (server.ReuseControl) rather than owning it
-// exclusively, so the upstream device's own discovery responder keeps working and
-// both appear in the list -- the operator picks the proxy's port to route a
-// session through the fault injector, or the real port to bypass it.
+// discovery port (server.ReuseControl) rather than owning it exclusively, so the
+// upstream device's own discovery responder keeps working and both appear in the
+// list -- the operator picks the proxy's port to route a session through the fault
+// injector, or the real port to bypass it.
 //
-// Caveat: SO_REUSEPORT delivers a broadcast probe to every co-bound responder (so
+// Caveat: port sharing delivers a broadcast probe to every co-bound responder (so
 // both answer), but a directed unicast probe reaches only one of them.
+//
+// Advertising is best-effort: a bind failure is logged, never fatal, since the proxy
+// itself still works and the operator can reach it by typed address.
 func runAdvertise(ctx context.Context, alpacaPort int) {
 	lc := net.ListenConfig{Control: server.ReuseControl}
 	pc, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", alpacaDiscoveryPort))
@@ -115,6 +119,9 @@ func runAdvertise(ctx context.Context, alpacaPort int) {
 		log.Printf("advertise: discovery listen failed: %v", err)
 		return
 	}
+	// Announce only once the port is actually held — logging before the bind claims a
+	// responder that may not exist.
+	log.Printf("advertising Alpaca discovery on :%d -> AlpacaPort %d", alpacaDiscoveryPort, alpacaPort)
 	serveAdvertise(ctx, pc.(*net.UDPConn), alpacaPort)
 }
 
@@ -1119,9 +1126,12 @@ func listenPort(addr string) int {
 // excluding the proxy's own port on loopback (a stale same-host instance), so it
 // never targets itself. It is called before the advertise responder starts, so
 // the proxy's own current advertisement can't appear in the results.
+// Both branches route the dialable address through client.URLAuthority: a discovered
+// IPv6 link-local address carries the OS's zone verbatim ("fe80::1%eth0", or on Windows
+// "fe80::1%Ethernet Instance 0"), which url.Parse rejects unless the zone is percent-encoded.
 func resolveUpstream(ctx context.Context, discover bool, upstream, match string, ownPort int, timeout time.Duration) (*url.URL, error) {
 	if !discover {
-		return url.Parse("http://" + upstream)
+		return url.Parse("http://" + client.URLAuthority(upstream))
 	}
 	servers, err := client.DiscoverContext(ctx, timeout)
 	if err != nil {
@@ -1133,7 +1143,7 @@ func resolveUpstream(ctx context.Context, discover bool, upstream, match string,
 	if err != nil {
 		return nil, err
 	}
-	return url.Parse("http://" + s.Address)
+	return url.Parse("http://" + client.URLAuthority(s.Address))
 }
 
 // chooseServer selects the upstream from discovery results: it drops the proxy's
@@ -1178,7 +1188,7 @@ func main() {
 	listen := flag.String("listen", ":11510", "proxy HTTP listen address")
 	upstream := flag.String("upstream", "127.0.0.1:11111", "upstream Alpaca server host:port")
 	seed := flag.Int64("seed", 0, "PRNG seed for jitter/flaky/lossy/chaos (0 = time-based)")
-	advertise := flag.Bool("advertise", false, "answer Alpaca UDP discovery (:32227) with the proxy's own port so it appears in discovery tools alongside the real device (co-binds via SO_REUSEPORT)")
+	advertise := flag.Bool("advertise", false, "answer Alpaca UDP discovery (:32227) with the proxy's own port so it appears in discovery tools alongside the real device (co-binds the discovery port)")
 	discover := flag.Bool("discover", false, "find the upstream via Alpaca UDP discovery instead of using -upstream")
 	discoverMatch := flag.String("discover-match", "", "with -discover, require the chosen server to host a device of this type (e.g. camera, telescope)")
 	discoverTimeout := flag.Duration("discover-timeout", 2*time.Second, "discovery listen window for -discover")
@@ -1206,8 +1216,7 @@ func main() {
 	srv := &http.Server{Addr: *listen, Handler: px}
 
 	if *advertise {
-		go runAdvertise(ctx, ownPort)
-		log.Printf("advertising Alpaca discovery on :%d -> AlpacaPort %d", alpacaDiscoveryPort, ownPort)
+		go runAdvertise(ctx, ownPort) // logs once it actually holds the port (or why it can't)
 	}
 
 	drained := make(chan struct{})
