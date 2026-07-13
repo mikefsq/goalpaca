@@ -91,6 +91,17 @@ func WithSlewRate(degPerSec float64) TelescopeOption {
 	}
 }
 
+// WithPosition sets the initial pointing (RA hours, Dec degrees) instead of the
+// default celestial pole. Unlike SyncToCoordinates it does not mark the target
+// properties as set, so reading TargetRightAscension/TargetDeclination before a
+// client sets them still errors per the ASCOM contract.
+func WithPosition(raHours, decDeg float64) TelescopeOption {
+	return func(t *Telescope) {
+		t.startRA, t.targetRA, t.wantRA = raHours, raHours, raHours
+		t.startDec, t.targetDec, t.wantDec = decDeg, decDeg, decDeg
+	}
+}
+
 // NewTelescope creates a simulated Telescope parked-capable mount pointed at the
 // celestial pole, tracking off. The default slew rate makes a typical slew take
 // roughly one second.
