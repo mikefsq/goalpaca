@@ -658,6 +658,25 @@ def t_hang_capture_timeout(h):
     return msg
 
 
+def t_frame_delivery_warning(h):
+    """R14 (slow): sustained network latency on the camera drives the per-frame delivery
+    overhead past the warn threshold, raising the one-time slow-frame-delivery alert. Needs
+    ~20 frames of stable stats, so it is a minutes-long soak. Latency (not a failure) keeps
+    guiding alive, just slow."""
+    h.ensure_guiding()
+    mark = h.phd2.mark()
+    h.cam.set("fault=latency&value=1600")  # ~3s overhead/frame (imageready + imagearray)
+    try:
+        ev = h.phd2.wait_event(mark, alert_with("frame delivery"), 180)
+        assert ev, "no slow-frame-delivery alert after sustained latency (>=20 frames)"
+        msg = ev.get("Msg", "").split("\n")[0]
+    finally:
+        h.clear_all()
+    mark = h.phd2.mark()
+    assert h.phd2.wait_event(mark, event_named("GuideStep"), 30), "guiding did not recover after clear"
+    return msg
+
+
 def t_set_cooler_alert(h):
     """cooler set PUT fails while the status read stays healthy
     -> 'error turning camera cooler' alert. PHD2 has no RPC to toggle the cooler,
@@ -744,6 +763,7 @@ TESTS = [
     ("connect_fail_alert", t_connect_fail_alert, "fast"),
     ("hang_capture_timeout", t_hang_capture_timeout, "slow"),
     ("a1_invalid_guide_rates", t_a1_invalid_guide_rates, "slow"),
+    ("frame_delivery_warning", t_frame_delivery_warning, "slow"),
     ("set_cooler_alert", t_set_cooler_alert, "interactive"),
 ]
 
