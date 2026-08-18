@@ -206,3 +206,43 @@ func TestDeviceStateMerge(t *testing.T) {
 		t.Error("camera devicestate lost the built CameraState entry")
 	}
 }
+
+// dsSwitch is a two-switch bank: a relay (binary) and a dimmer (0..100), so the built
+// DeviceState must carry both the boolean and the analog view of each.
+type dsSwitch struct {
+	BaseSwitch
+	val [2]float64
+}
+
+func (s *dsSwitch) MaxSwitch() int                           { return 2 }
+func (s *dsSwitch) MaxSwitchValue(id int) (float64, error)   { return []float64{1, 100}[id], nil }
+func (s *dsSwitch) GetSwitchValue(id int) (float64, error)   { return s.val[id], nil }
+func (s *dsSwitch) GetSwitch(id int) (bool, error)           { return s.val[id] != 0, nil }
+func (s *dsSwitch) StateChangeComplete(id int) (bool, error) { return true, nil }
+
+// ISwitchV3 has no scalar operational property: DeviceState must publish the whole bank,
+// indexed — GetSwitch{n}, GetSwitchValue{n}, StateChangeComplete{n} — so a client gets it
+// in one round trip instead of 3·MaxSwitch separate GETs.
+func TestDeviceStateSwitch(t *testing.T) {
+	sw := &dsSwitch{val: [2]float64{0, 60}}
+	got := map[string]any{}
+	for _, sv := range deviceStateValues(SwitchType, sw) {
+		got[sv.Name] = sv.Value
+	}
+	want := map[string]any{
+		"GetSwitch0": false, "GetSwitchValue0": 0.0, "StateChangeComplete0": true,
+		"GetSwitch1": true, "GetSwitchValue1": 60.0, "StateChangeComplete1": true,
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("DeviceState[%s] = %v, want %v", name, got[name], w)
+		}
+	}
+	// The six switch entries plus the mandatory TimeStamp.
+	if _, ok := got["TimeStamp"]; !ok {
+		t.Error("DeviceState is missing the mandatory TimeStamp")
+	}
+	if len(got) != len(want)+1 {
+		t.Errorf("DeviceState has %d entries, want %d: %v", len(got), len(want)+1, got)
+	}
+}

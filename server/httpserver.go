@@ -46,6 +46,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.handleManagement(w, r)
 	case strings.HasPrefix(path, "/api/v1/"):
 		s.handleDeviceAPI(w, r)
+	case path == "/setup" || strings.HasPrefix(path, "/setup/"):
+		s.handleSetup(w, r)
 	case path == "/health":
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)

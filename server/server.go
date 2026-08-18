@@ -82,6 +82,14 @@ type Config struct {
 	// is logged and skipped; if none bind, Run returns an error.
 	Hosts []string
 
+	// Settings, if non-nil, persists Configurable devices' settings across
+	// restarts: the server loads and applies each device's stored values at
+	// startup (before hardware opens) and saves them after every successful
+	// /setup form submission. Use NewFileStore for the default JSON-file store;
+	// the server does no persistence when this is nil (settings are in-memory
+	// only, as before). Load/apply errors are logged, never fatal.
+	Settings SettingsStore
+
 	// Management metadata (served at /management/v1/description).
 	ServerName          string
 	Manufacturer        string
@@ -236,6 +244,10 @@ func (s *Server) lookup(devType DeviceType, number int) (Device, bool) {
 // until ctx is cancelled, then shuts down gracefully and closes hardware last
 // (so cooling/regulation persists until the very end).
 func (s *Server) Run(ctx context.Context) error {
+	// 0. Apply persisted setup settings before hardware opens, so a device opens
+	// with its saved configuration (e.g. a cooler setpoint) already in effect.
+	s.loadSettings()
+
 	// 1. Open hardware once for every Hardware-implementing device.
 	opened := s.openHardware(ctx)
 
@@ -313,6 +325,49 @@ func (s *Server) Run(ctx context.Context) error {
 	s.closeHardware(context.Background(), opened)
 
 	return runErr
+}
+
+// loadSettings applies each Configurable device's persisted settings (if a
+// SettingsStore is configured), establishing the precedence
+// code default < persisted config file < host override (hurd.conf). The device
+// is already constructed with its defaults and any host overrides in effect;
+// persisted values overlay only the fields the host has NOT pinned. A field the
+// device reports as Locked (host-pinned) is dropped before ApplySettings, so
+// persistence can never clobber a hurd.conf value. Errors are logged and
+// skipped — a bad or missing store must never stop the server.
+func (s *Server) loadSettings() {
+	if s.cfg.Settings == nil {
+		return
+	}
+	s.mu.RLock()
+	order := append([]*registeredDevice(nil), s.order...)
+	s.mu.RUnlock()
+	for _, rd := range order {
+		cfg, ok := rd.dev.(Configurable)
+		if !ok {
+			continue
+		}
+		vals, err := s.cfg.Settings.Load(rd.dev.UniqueID())
+		if err != nil {
+			s.logf("goalpaca: load settings for %s %d: %v", rd.typ, rd.num, err)
+			continue
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		// Never let persistence override a host-pinned field.
+		for _, f := range cfg.SettingsForm() {
+			if f.Locked {
+				delete(vals, f.Name)
+			}
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		if err := cfg.ApplySettings(vals); err != nil {
+			s.logf("goalpaca: apply persisted settings for %s %d: %v", rd.typ, rd.num, err)
+		}
+	}
 }
 
 // openHardware calls Open on every Hardware device, returning those opened (in

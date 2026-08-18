@@ -1,6 +1,9 @@
 package server
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // deviceStateValues builds the Platform 7 DeviceState operational-property set
 // for a device, appending the mandatory ISO-8601 UTC TimeStamp. The library
@@ -55,9 +58,9 @@ func deviceStateValues(devType DeviceType, dev Device) []StateValue {
 			sv = []StateValue{{Name: "IsSafe", Value: x.IsSafe()}}
 		}
 	case SwitchType:
-		// Switch state is indexed per-switch; DeviceState carries no scalar
-		// operational property (only the TimeStamp below).
-		sv = []StateValue{}
+		if x, ok := dev.(Switch); ok {
+			sv = switchStateValues(x)
+		}
 	case TelescopeType:
 		if x, ok := dev.(Telescope); ok {
 			sv = telescopeStateValues(x)
@@ -157,6 +160,31 @@ func focuserStateValues(f Focuser) []StateValue {
 	}
 	t, tErr := f.Temperature()
 	sv = appendIfOK(sv, "Temperature", t, tErr)
+	return sv
+}
+
+// switchStateValues builds the per-switch DeviceState set. ISwitchV3 has no scalar
+// operational property: its state is indexed, and the spec says to append the switch
+// number to each property name, so a device with four switches publishes GetSwitch0..3,
+// GetSwitchValue0..3 and StateChangeComplete0..3 (plus the TimeStamp added by the
+// caller). A client polling devicestate thus gets the whole switch bank in one round
+// trip instead of 3·MaxSwitch separate GETs — which is the point of the property.
+//
+// Entries whose getter errors are omitted, as everywhere else in DeviceState.
+func switchStateValues(s Switch) []StateValue {
+	max := s.MaxSwitch()
+	sv := make([]StateValue, 0, 3*max)
+	for id := 0; id < max; id++ {
+		if v, err := s.GetSwitch(id); err == nil {
+			sv = append(sv, StateValue{Name: fmt.Sprintf("GetSwitch%d", id), Value: v})
+		}
+		if v, err := s.GetSwitchValue(id); err == nil {
+			sv = append(sv, StateValue{Name: fmt.Sprintf("GetSwitchValue%d", id), Value: v})
+		}
+		if v, err := s.StateChangeComplete(id); err == nil {
+			sv = append(sv, StateValue{Name: fmt.Sprintf("StateChangeComplete%d", id), Value: v})
+		}
+	}
 	return sv
 }
 
