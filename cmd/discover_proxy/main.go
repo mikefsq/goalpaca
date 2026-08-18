@@ -1,90 +1,57 @@
 // Command discover_proxy is an Alpaca discovery + registration server. It
 // answers the Alpaca UDP discovery protocol on :32227 on behalf of per-device
-// drivers that register via periodic unicast heartbeat.
+// drivers that register via periodic unicast heartbeat (server.Heartbeat).
+//
+// A device on this host is answered for directly. A device on another host is
+// relayed to: the proxy posts the client's address to the device's relay
+// endpoint (server.DiscoveryReplyPath) and the device sends its own reply, so
+// the client sees the device's real address. See DISCOVERY_RELAY.md.
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
+
+	"github.com/mikefsq/goalpaca/server"
 )
 
-const token = "alpacadiscovery" // discovery request prefix; version digit follows
-
-// registration doubles as the discovery response schema (extra fields ignored by stock clients).
-type registration struct {
-	AlpacaPort int    `json:"AlpacaPort"`
-	UniqueID   string `json:"UniqueID,omitempty"`
-	DeviceType string `json:"DeviceType,omitempty"`
-	DeviceName string `json:"DeviceName,omitempty"`
+type proxy struct {
+	reg *server.Registrations
 }
 
-type entry struct {
-	port int
-	seen time.Time
-}
-
-type server struct {
-	mu  sync.Mutex
-	tab map[string]*entry
-	ttl time.Duration
-}
-
-func (s *server) upsert(r registration) {
-	key := r.UniqueID
-	if key == "" {
-		key = fmt.Sprintf("p%d", r.AlpacaPort)
-	}
-	s.mu.Lock()
-	s.tab[key] = &entry{port: r.AlpacaPort, seen: time.Now()}
-	s.mu.Unlock()
-}
-
-// livePorts returns distinct ports of non-expired devices, pruning stale entries.
-func (s *server) livePorts() []int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now, seen := time.Now(), map[int]bool{}
-	var ports []int
-	for k, e := range s.tab {
-		if now.Sub(e.seen) > s.ttl {
-			delete(s.tab, k)
-			continue
+func (s *proxy) handle(ctx context.Context, c *net.UDPConn, src *net.UDPAddr, p []byte) {
+	kind, _ := s.reg.Datagram(p, src)
+	switch kind {
+	case server.DatagramProbe:
+		ports := s.reg.LocalPorts()
+		var remote int
+		for _, e := range s.reg.Live() {
+			if !e.Local {
+				remote++
+			}
 		}
-		if !seen[e.port] {
-			seen[e.port] = true
-			ports = append(ports, e.port)
-		}
-	}
-	return ports
-}
-
-func (s *server) handle(c *net.UDPConn, src *net.UDPAddr, p []byte) {
-	if bytes.HasPrefix(bytes.TrimSpace(p), []byte(token)) { // client discovery request
-		ports := s.livePorts()
-		log.Printf("discovery from %s -> %d device(s): %v", src, len(ports), ports)
+		log.Printf("discovery from %s -> %d local port(s) %v, %d remote device(s)", src, len(ports), ports, remote)
 		for _, port := range ports {
-			b, _ := json.Marshal(registration{AlpacaPort: port})
+			b, _ := json.Marshal(struct {
+				AlpacaPort int `json:"AlpacaPort"`
+			}{port})
 			_, _ = c.WriteToUDP(b, src) // unicast back to requester
 		}
-		return
-	}
-	var r registration // device registration / heartbeat
-	if json.Unmarshal(p, &r) == nil && r.AlpacaPort != 0 {
-		s.upsert(r)
-		log.Printf("register %s port %d (%s)", r.UniqueID, r.AlpacaPort, r.DeviceType)
+		s.reg.Relay(ctx, src, func(e server.Registration, err error) {
+			log.Printf("relay to %s %s:%d: %v", e.UniqueID, e.Addr, e.AlpacaPort, err)
+		})
+	case server.DatagramHeartbeat:
+		// Logged at the table's rate would be every heartbeat; keep quiet.
 	}
 }
 
-func (s *server) serve(ctx context.Context, c *net.UDPConn) {
+func (s *proxy) serve(ctx context.Context, c *net.UDPConn) {
 	buf := make([]byte, 2048)
 	for ctx.Err() == nil {
 		_ = c.SetReadDeadline(time.Now().Add(time.Second))
@@ -98,7 +65,7 @@ func (s *server) serve(ctx context.Context, c *net.UDPConn) {
 			}
 			continue
 		}
-		s.handle(c, src, append([]byte(nil), buf[:n]...))
+		go s.handle(ctx, c, src, append([]byte(nil), buf[:n]...))
 	}
 }
 
@@ -119,7 +86,7 @@ func main() {
 		log.Fatalf("invalid -group address %q", *group)
 	}
 
-	s := &server{tab: map[string]*entry{}, ttl: *ttl}
+	s := &proxy{reg: server.NewRegistrations(*ttl)}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

@@ -25,13 +25,25 @@ type directResponse struct {
 	AlpacaPort int `json:"AlpacaPort"`
 }
 
-// heartbeat is the Register-mode unicast schema (shared with the discovery
-// server). One is sent per registered device.
-type heartbeat struct {
+// Heartbeat is the Register-mode registration datagram, one per device,
+// unicast to the discovery server or orchestrator named by
+// DiscoveryConfig.ServerAddr. The receiver answers discovery probes for the
+// device: directly when the device is on its own host, and through the relay
+// endpoint (DiscoveryReplyPath) when it is not.
+//
+// AlpacaPort is the bound port, so a device that scanned for a port reports the
+// one it got. Address is the IP the device is reachable at when it knows one
+// (Config.Hosts names a single address); when empty the receiver uses the
+// datagram's source address, which is what a routed peer sees anyway. Instance
+// is the host's name for the device (DiscoveryConfig.Instance), the join key
+// an orchestrator uses to match the registration to its own entry.
+type Heartbeat struct {
 	AlpacaPort int    `json:"AlpacaPort"`
 	UniqueID   string `json:"UniqueID"`
 	DeviceType string `json:"DeviceType"`
 	DeviceName string `json:"DeviceName"`
+	Instance   string `json:"Instance,omitempty"`
+	Address    string `json:"Address,omitempty"`
 }
 
 func (s *Server) startDiscovery(ctx context.Context) {
@@ -115,6 +127,9 @@ func (s *Server) runRegisterDiscovery(ctx context.Context) {
 		s.logf("goalpaca: register discovery resolve failed: %v", err)
 		return
 	}
+	// The relay endpoint accepts requests from this peer alone; record it
+	// before the first datagram goes out so no request arrives ahead of it.
+	s.relayPeer.Store(&raddr.IP)
 	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		s.logf("goalpaca: register discovery dial failed: %v", err)
@@ -137,18 +152,39 @@ func (s *Server) runRegisterDiscovery(ctx context.Context) {
 }
 
 func (s *Server) sendHeartbeats(conn *net.UDPConn) {
+	addr := s.reachableAddress()
 	s.mu.RLock()
-	order := append([]*registeredDevice(nil), s.order...)
-	s.mu.RUnlock()
-	for _, rd := range order {
-		hb, _ := json.Marshal(heartbeat{
+	var hbs [][]byte
+	for _, rd := range s.order {
+		hb, _ := json.Marshal(Heartbeat{
 			AlpacaPort: s.advertisedPort(),
 			UniqueID:   rd.dev.UniqueID(),
 			DeviceType: string(rd.typ),
 			DeviceName: rd.dev.Name(),
+			Instance:   s.cfg.Discovery.Instance,
+			Address:    addr,
 		})
+		hbs = append(hbs, hb)
+	}
+	s.mu.RUnlock()
+	for _, hb := range hbs {
 		_, _ = conn.Write(hb)
 	}
+}
+
+// reachableAddress is the address a registration carries: the one host in
+// Config.Hosts when it is a single specific IP, since a device told to bind one
+// address is reachable there and possibly nowhere else. Otherwise it is empty
+// and the receiver falls back to the datagram's source address.
+func (s *Server) reachableAddress() string {
+	if len(s.cfg.Hosts) != 1 {
+		return ""
+	}
+	ip := net.ParseIP(s.cfg.Hosts[0])
+	if ip == nil || ip.IsUnspecified() {
+		return ""
+	}
+	return ip.String()
 }
 
 // advertisedPort is the port discovery responses and heartbeats carry: the

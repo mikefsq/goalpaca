@@ -142,3 +142,17 @@ func TestCommonKeysCopy(t *testing.T) {
 		t.Fatal("CommonKeys returned the internal slice, not a copy")
 	}
 }
+
+// TestPackagePath: a driver's package path is read off its New function.
+func TestPackagePath(t *testing.T) {
+	d := Driver{New: func(Spec) (server.Device, error) { return nil, nil }}
+	if got := d.PackagePath(); got != "github.com/mikefsq/goalpaca/registry" {
+		t.Fatalf("PackagePath %q", got)
+	}
+	if (Driver{}).PackagePath() != "" {
+		t.Fatal("nil New should have no path")
+	}
+	// The test binary's main module is this one; ModuleVersion resolves through
+	// Main and does not panic. Its value depends on how the binary was built.
+	_ = d.ModuleVersion()
+}

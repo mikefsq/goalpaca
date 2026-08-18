@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,4 +62,68 @@ func freePort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// With AlpacaPort 0 and a PortScanBase, Run binds the first free port at or
+// above the base and Port reports it. Two servers scanning the same base get
+// distinct ports, because the bind is the probe: the second finds the first's
+// port taken and moves on. AlpacaPort 0 with no base keeps the OS-assigned
+// port.
+func TestPortScan(t *testing.T) {
+	base := 40000 + int(time.Now().UnixNano()%1000)*10 // avoid collisions across runs
+	mk := func() *Server {
+		s := New(Config{AlpacaPort: 0, PortScanBase: base, PortScanLimit: 10,
+			Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "scan"})
+		if err := s.Register(customType, 0, newTestFocuser()); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, b := mk(), mk()
+	go a.Run(ctx)
+	waitPort(t, a)
+	go b.Run(ctx)
+	waitPort(t, b)
+	if a.Port() < base || a.Port() >= base+10 || b.Port() < base || b.Port() >= base+10 {
+		t.Errorf("ports %d %d outside %d..%d", a.Port(), b.Port(), base, base+9)
+	}
+	if a.Port() == b.Port() {
+		t.Errorf("both servers bound %d", a.Port())
+	}
+	if a.Port() != base {
+		t.Errorf("first server should take the base %d, got %d", base, a.Port())
+	}
+	// A server with no base and port 0 is OS-assigned, outside the scan range.
+	c := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "os"})
+	if err := c.Register(customType, 0, newTestFocuser()); err != nil {
+		t.Fatal(err)
+	}
+	go c.Run(ctx)
+	waitPort(t, c)
+	if c.Port() == 0 {
+		t.Error("OS-assigned port not reported")
+	}
+	// A full range is an error, not a hang.
+	full := New(Config{AlpacaPort: 0, PortScanBase: a.Port(), PortScanLimit: 2,
+		Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "full"})
+	if err := full.Register(customType, 0, newTestFocuser()); err != nil {
+		t.Fatal(err)
+	}
+	if err := full.Run(ctx); err == nil || !strings.Contains(err.Error(), "no free port") {
+		t.Errorf("full range: err = %v", err)
+	}
+}
+
+func waitPort(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.Port() != 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server did not bind")
 }

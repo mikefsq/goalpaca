@@ -61,9 +61,16 @@ type Device interface {
 }
 
 // Hardware is the persistent-owner lifecycle. If a registered Device also
-// implements Hardware, Open is called exactly once when the Server Runs and
-// Close exactly once at graceful shutdown. The SDK handle / cooling loop lives
-// for the whole process, independent of any Alpaca client's Connected state.
+// implements Hardware, Open is called once when the Server Runs and Close once
+// at graceful shutdown; a Reload closes the old device and opens its
+// replacement the same way. The SDK handle / cooling loop lives for the whole
+// process, independent of any Alpaca client's Connected state.
+//
+// Open's ctx lives until the server closes the device: it is cancelled before
+// Close is called, so a loop Open started under it (an acquire-monitor loop,
+// say) sees the end. Close has to wait for that loop to stop before it
+// releases the handle, or the loop's next pass re-acquires the hardware from
+// under the device replacing it. RunLoop and its returned stop do this.
 type Hardware interface {
 	Open(ctx context.Context) error  // open SDK, start regulation goroutine
 	Close(ctx context.Context) error // release on shutdown only

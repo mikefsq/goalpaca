@@ -32,3 +32,37 @@ func Supervise(ctx context.Context, name string, fn func()) {
 		time.Sleep(time.Second)
 	}
 }
+
+// RunLoop starts fn under Supervise in the background, on a context derived
+// from ctx, and returns a stop function for Close: it cancels that context and
+// blocks until fn has ended, or until timeout. A device's Open runs its
+// acquire-monitor loop through it and its Close stops the loop before
+// releasing the handle, so the loop cannot re-acquire the hardware between the
+// two, which is what a Reload needs; and Close needs no help from the caller
+// to end the loop.
+//
+//	func (d *Dev) Open(ctx context.Context) error {
+//		d.stopLoop = server.RunLoop(ctx, d.ID, d.manageHardware)
+//		return nil
+//	}
+//	func (d *Dev) Close(context.Context) error {
+//		d.stopLoop(10 * time.Second)
+//		d.teardown()
+//		return nil
+//	}
+func RunLoop(ctx context.Context, name string, fn func(ctx context.Context)) (stop func(timeout time.Duration)) {
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(loopCtx, name, func() { fn(loopCtx) })
+	}()
+	return func(timeout time.Duration) {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			log.Printf("goalpaca: %s: loop did not stop within %s; closing anyway", name, timeout)
+		}
+	}
+}

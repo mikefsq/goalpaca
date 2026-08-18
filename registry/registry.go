@@ -22,8 +22,8 @@
 // # Config ownership
 //
 // One JSON config entry declares one device. The host owns the common keys
-// (CommonKeys: "driver", "name", "enable", "port", "device", the INDI/LX200
-// front-end keys, and the optics block); everything else in the entry belongs to the
+// (CommonKeys: "driver", "name", "enable", "port", "device", "exec", the
+// INDI/LX200 front-end keys, and the optics block); everything else in the entry belongs to the
 // driver, which decodes it from Spec.Raw via Spec.Decode into its own config
 // struct. Decode is strict — unknown keys are errors — so a typo in a device
 // entry is reported instead of silently ignored, without the host needing to
@@ -35,6 +35,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -63,15 +66,30 @@ type Driver struct {
 
 	// New constructs the device from its config entry. It must not touch
 	// hardware: acquisition happens later, in the device's own lifecycle
-	// (acquire → monitor → re-acquire), so a device can be configured before its
+	// (acquire, monitor, re-acquire), so a device can be configured before its
 	// hardware is attached.
 	New func(Spec) (server.Device, error)
+
+	// Config, when set, returns a pointer to a zero value of the driver's config
+	// struct: the same struct New decodes its entry into. The struct's fields
+	// carry `json` tags naming the config keys and `alpaca` tags describing the
+	// setup form (server.ParseSettingTag), so a host can render a browser
+	// configuration form and validate submissions without per-driver form code.
+	// Optional; a driver that leaves it nil gets the "no configurable settings"
+	// setup page unless it implements server.Configurable itself.
+	Config func() any
 }
 
 // Spec is the driver-facing view of one device config entry.
 type Spec struct {
 	Driver string // the entry's "driver" key (canonical registered casing)
 	Name   string // the entry's "name" display-name override; "" when unset
+
+	// Instance is the entry's identity as the host names it: a devices.d file's
+	// stem, or "" for an inline entry. It is the word that joins a host's log
+	// lines to a driver's, so a driver puts it in its own log lines through
+	// server.BaseDevice.Label.
+	Instance string
 
 	// Raw is the entire JSON config entry, common keys included. Drivers decode
 	// their own fields from it with Decode.
@@ -81,7 +99,7 @@ type Spec struct {
 // commonKeys are the host-owned config entry keys, stripped by Decode before a
 // driver's strict decode. Matched case-insensitively.
 var commonKeys = []string{
-	"driver", "name", "enable", "port", "device",
+	"driver", "name", "enable", "port", "device", "exec",
 	"indi", "lx200Port",
 	"aperture", "apertureArea", "focalLength",
 	"guiderAperture", "guiderFocalLength", "guideRate",
@@ -145,6 +163,57 @@ func Register(d Driver) {
 		panic("registry: duplicate driver " + d.Name)
 	}
 	drivers[key] = d
+}
+
+// PackagePath is the import path of the package that registered d, read off
+// its New function, so a host can name the driver's module and look its
+// version up in the binary's build info (debug.ReadBuildInfo). "" when New is
+// nil.
+func (d Driver) PackagePath() string {
+	if d.New == nil {
+		return ""
+	}
+	fn := runtime.FuncForPC(reflect.ValueOf(d.New).Pointer())
+	if fn == nil {
+		return ""
+	}
+	name := fn.Name() // "github.com/x/y/pkg.init.func1" or "github.com/x/y/pkg.newDev"
+	// The package path ends at the first dot after the last slash.
+	slash := strings.LastIndex(name, "/")
+	if dot := strings.Index(name[slash+1:], "."); dot >= 0 {
+		return name[:slash+1+dot]
+	}
+	return name
+}
+
+// ModuleVersion is the version of the module that provides d, from the
+// binary's build info: a tagged version, a pseudo-version, or "(devel)" for a
+// workspace or replaced checkout. "" when the binary carries no build info or
+// the module is not among its dependencies (the main module, say).
+func (d Driver) ModuleVersion() string {
+	pkg := d.PackagePath()
+	if pkg == "" {
+		return ""
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	best := ""
+	version := ""
+	for _, dep := range bi.Deps {
+		m := dep
+		if m.Replace != nil {
+			m = m.Replace
+		}
+		if (pkg == dep.Path || strings.HasPrefix(pkg, dep.Path+"/")) && len(dep.Path) > len(best) {
+			best, version = dep.Path, m.Version
+		}
+	}
+	if best == "" && (pkg == bi.Main.Path || strings.HasPrefix(pkg, bi.Main.Path+"/")) {
+		return bi.Main.Version
+	}
+	return version
 }
 
 // Lookup returns the driver registered under name (case-insensitive).

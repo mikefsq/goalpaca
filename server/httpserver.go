@@ -48,13 +48,31 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceAPI(w, r)
 	case path == "/setup" || strings.HasPrefix(path, "/setup/"):
 		s.handleSetup(w, r)
+	case path == DiscoveryReplyPath:
+		s.handleDiscoveryReply(w, r)
 	case path == "/health":
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	case path == "/" && r.Method == http.MethodGet:
+		// The spec defines no root page. A person typing the address is looking
+		// for the setup page, the spec's "well known new user starting point", so
+		// send them there; a host that carries one page of its own points here.
+		http.Redirect(w, r, "/setup", http.StatusFound)
 	default:
-		http.NotFound(w, r)
+		s.notFound(w, r)
 	}
+}
+
+// notFound answers an unrouted path. A browser gets an HTML page that links to
+// /setup, since a mistyped URL is the common way to land here; anything else
+// gets the plain-text 404 an API client expects.
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	if !strings.Contains(r.Header.Get("Accept"), "text/html") {
+		http.NotFound(w, r)
+		return
+	}
+	s.setupError(w, http.StatusNotFound, "No such page. The setup page lists this server's devices.")
 }
 
 // handleDeviceAPI serves GET|PUT /api/v1/{device_type}/{device_number}/{member}.

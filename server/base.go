@@ -23,6 +23,11 @@ type BaseDevice struct {
 	Version  string
 	IfaceVer int
 
+	// Instance is the host's name for this device (a devices.d file's stem),
+	// set from registry.Spec.Instance. Label returns it for log lines so a
+	// driver's messages and the host's share one identifier.
+	Instance string
+
 	mu        sync.Mutex
 	connected bool
 	connectOp Op
@@ -86,6 +91,16 @@ func (b *BaseDevice) MarkDisconnected() {
 
 // SupportedActions/Action/Command* default to "not implemented". Authors with
 // non-standard functionality override them.
+// Label is the identifier a driver puts in its log lines: the host's instance
+// name when there is one, else the UniqueID. A hurd logs "main-camera on
+// :11201" and the driver logs "main-camera acquired", so the two lines join.
+func (b *BaseDevice) Label() string {
+	if b.Instance != "" {
+		return b.Instance
+	}
+	return b.ID
+}
+
 func (b *BaseDevice) SupportedActions() []string { return []string{} }
 
 func (b *BaseDevice) Action(name, params string) (string, error) {
