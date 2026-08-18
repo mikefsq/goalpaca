@@ -22,8 +22,8 @@
 // # Config ownership
 //
 // One JSON config entry declares one device. The host owns the common keys
-// (CommonKeys: "driver", "name", "enable", "port", the INDI/LX200 front-end
-// keys, and the optics block); everything else in the entry belongs to the
+// (CommonKeys: "driver", "name", "enable", "port", "device", the INDI/LX200
+// front-end keys, and the optics block); everything else in the entry belongs to the
 // driver, which decodes it from Spec.Raw via Spec.Decode into its own config
 // struct. Decode is strict — unknown keys are errors — so a typo in a device
 // entry is reported instead of silently ignored, without the host needing to
@@ -81,7 +81,7 @@ type Spec struct {
 // commonKeys are the host-owned config entry keys, stripped by Decode before a
 // driver's strict decode. Matched case-insensitively.
 var commonKeys = []string{
-	"driver", "name", "enable", "port",
+	"driver", "name", "enable", "port", "device",
 	"indi", "lx200Port",
 	"aperture", "apertureArea", "focalLength",
 	"guiderAperture", "guiderFocalLength", "guideRate",
