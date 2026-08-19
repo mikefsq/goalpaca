@@ -70,6 +70,15 @@ type Driver struct {
 	// hardware is attached.
 	New func(Spec) (server.Device, error)
 
+	// MultiKey, when set, names the entry key holding an array of per-device
+	// blocks for a driver that serves several devices of its type from one
+	// entry (astrocam's "cameras"). A host that finds the key expands the
+	// entry into one Spec per block — the block body as Raw, the block's
+	// position as Device — and constructs each through New. An entry without
+	// the key stays the flat one-device form. Hosts that never expand (a
+	// single-device binary) ignore it.
+	MultiKey string
+
 	// Config, when set, returns a pointer to a zero value of the driver's config
 	// struct: the same struct New decodes its entry into. The struct's fields
 	// carry `json` tags naming the config keys and `alpaca` tags describing the
@@ -94,6 +103,13 @@ type Spec struct {
 	// Raw is the entire JSON config entry, common keys included. Drivers decode
 	// their own fields from it with Decode.
 	Raw json.RawMessage
+
+	// Device is the ASCOM device number the host will register this device
+	// under, when the host knows it at construction time (a pinned "device"
+	// key, or a block's position in a MultiKey entry); zero otherwise. A
+	// driver whose devices default their hardware binding to their position
+	// (astrocam's enumeration index) reads it for that default.
+	Device int
 }
 
 // commonKeys are the host-owned config entry keys, stripped by Decode before a
