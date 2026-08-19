@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/mikefsq/goalpaca/registry"
@@ -66,6 +67,14 @@ type Options struct {
 	// is constructed. Returning done=true ends Run there with err, which is how
 	// a utility flag such as -list exits without serving.
 	BeforeRun func() (done bool, err error)
+	// AfterRegister, when non-nil, runs once the device is registered and the
+	// server is about to start: a binary wires an extra front-end onto its
+	// device here (a mount's LX200 bridge, say). dev returns the current
+	// device — a reload swaps it, so a front-end that calls dev() per use
+	// follows the swap — entry is the assembled device entry (file plus
+	// flags), and ctx ends with the server. An error stops the binary before
+	// it serves.
+	AfterRegister func(ctx context.Context, dev func() server.Device, entry map[string]json.RawMessage) error
 }
 
 // Run serves the named driver as a standalone Alpaca device and returns when
@@ -308,12 +317,25 @@ func RunWith(driverName string, opt Options) error {
 			return err
 		}
 	}
+	// The current device, for AfterRegister front-ends: a reload swaps it.
+	var devMu sync.RWMutex
+	curDev := dev
+	getDev := func() server.Device {
+		devMu.RLock()
+		defer devMu.RUnlock()
+		return curDev
+	}
 	// A reload re-runs construct: the file and flags are read again, the
 	// device rebuilt, its hardware closed and reopened, the port kept. It is
 	// offered on the setup page and, on Unix, by SIGHUP.
 	if err := srv.SetReloader(drv.Type, 0, func(context.Context) (server.Device, server.Configurable, error) {
-		_, dev, sc, err := construct()
-		return dev, sc, err
+		_, ndev, nsc, err := construct()
+		if err == nil {
+			devMu.Lock()
+			curDev = ndev
+			devMu.Unlock()
+		}
+		return ndev, nsc, err
 	}); err != nil {
 		return err
 	}
@@ -329,6 +351,20 @@ func RunWith(driverName string, opt Options) error {
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
+	}
+	// The driver's own front-end (a mount's LX200 bridge), wired from the same
+	// entry in every layout; then the binary's extras. The device lives as
+	// long as the process here, so its front-end context is the serve
+	// context, and the server binds every interface, so hosts is empty.
+	if drv.FrontEnd != nil {
+		if err := drv.FrontEnd(ctx, getDev, mustJSON(entry), nil); err != nil {
+			logger.Printf("front-end: %v", err)
+		}
+	}
+	if opt.AfterRegister != nil {
+		if err := opt.AfterRegister(ctx, getDev, entry); err != nil {
+			return err
+		}
 	}
 	stopReload := onReloadSignal(ctx, func() {
 		if err := srv.ReloadAll(ctx); err != nil {

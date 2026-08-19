@@ -401,6 +401,13 @@ func (s *Server) lookup(devType DeviceType, number int) (Device, bool) {
 	return rd.dev, true
 }
 
+// Device returns the device currently registered at the address. A reload
+// swaps the registered device, so a front-end that resolves it through here
+// per call follows the swap instead of holding the replaced object.
+func (s *Server) Device(devType DeviceType, number int) (Device, bool) {
+	return s.lookup(devType, number)
+}
+
 // lookupRegistered returns the registration record for a device, which carries
 // the attached Configurable alongside the device itself.
 func (s *Server) lookupRegistered(devType DeviceType, number int) (*registeredDevice, bool) {

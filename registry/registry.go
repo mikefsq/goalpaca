@@ -33,6 +33,7 @@ package registry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -78,6 +79,31 @@ type Driver struct {
 	// the key stays the flat one-device form. Hosts that never expand (a
 	// single-device binary) ignore it.
 	MultiKey string
+
+	// FrontEnd, when set, wires the driver's extra protocol front-end onto a
+	// registered device (a mount's LX200 bridge, say). Every host calls it
+	// once per registered device of this driver whose Alpaca server is up, so
+	// an entry means the same thing compiled in and as a separate binary. The
+	// hook decides from the entry whether to do anything (lx200Port absent:
+	// return nil); an error is reported by the host and the device serves
+	// without the front-end.
+	//
+	// The contract:
+	//   - ctx is the device's: the host cancels it when the device is
+	//     unregistered (or the host stops), and calls FrontEnd again if the
+	//     device is registered again. A front-end serves until ctx ends.
+	//   - dev returns the device currently registered, or nil while there is
+	//     none (mid-reload, after an unregister); resolve it per use and
+	//     handle nil.
+	//   - entry is the device's config entry: the whole file for a flat
+	//     entry, the device's block for a MultiKey entry, so a front-end key
+	//     belongs in the block.
+	//   - hosts are the addresses the device's Alpaca server binds ("listen"
+	//     restrictions included); a front-end binds the same ones. Empty
+	//     means every interface.
+	//   - FrontEnd must return promptly: it may be called under a host lock,
+	//     so serving and slow work belong in goroutines that end with ctx.
+	FrontEnd func(ctx context.Context, dev func() server.Device, entry json.RawMessage, hosts []string) error
 
 	// Config, when set, returns a pointer to a zero value of the driver's config
 	// struct: the same struct New decodes its entry into. The struct's fields

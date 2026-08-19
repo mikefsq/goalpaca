@@ -349,3 +349,107 @@ func TestRunReloadRereadsFile(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestAfterRegisterHook: the hook runs with the assembled entry (front-end
+// keys like lx200Port included) and a getter for the current device, before
+// the server begins serving.
+func TestAfterRegisterHook(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "hooked.json")
+	port := freePort(t)
+	os.WriteFile(cfg, []byte(`{"driver":"dm-focuser","port":`+itoa(port)+`,"lx200Port":14031}`), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var gotPort int
+	var gotDev server.Device
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWith("dm-focuser", Options{
+			Args: []string{"-config", cfg, "-discovery", "off", "-quiet"}, Stdout: io.Discard, Stderr: io.Discard, Context: ctx,
+			AfterRegister: func(hctx context.Context, dev func() server.Device, entry map[string]json.RawMessage) error {
+				_ = json.Unmarshal(entry["lx200Port"], &gotPort)
+				gotDev = dev()
+				cancel() // end the server as soon as it starts
+				return nil
+			},
+		})
+	}()
+	if err := <-done; err != nil {
+		t.Fatalf("RunWith: %v", err)
+	}
+	if gotPort != 14031 {
+		t.Errorf("hook entry lx200Port = %d, want 14031", gotPort)
+	}
+	if gotDev == nil || gotDev.Name() == "" {
+		t.Errorf("hook device getter returned %v", gotDev)
+	}
+}
+
+// dm-fe is a test driver with a FrontEnd; the hook records what devicemain
+// handed it.
+var dmFELast struct {
+	ctx   context.Context
+	hosts []string
+	entry json.RawMessage
+	dev   func() server.Device
+	calls int
+}
+
+func init() {
+	registry.Register(registry.Driver{
+		Name:          "dm-fe",
+		Type:          server.FocuserType,
+		Description:   "devicemain front-end test driver",
+		ConfigExample: `{ "driver": "dm-fe" }`,
+		New: func(spec registry.Spec) (server.Device, error) {
+			return sim.NewFocuser(), nil
+		},
+		FrontEnd: func(ctx context.Context, dev func() server.Device, entry json.RawMessage, hosts []string) error {
+			dmFELast.ctx, dmFELast.hosts, dmFELast.entry, dmFELast.dev = ctx, hosts, entry, dev
+			dmFELast.calls++
+			return nil
+		},
+	})
+}
+
+// TestFrontEndInvocation: devicemain calls the driver's FrontEnd before
+// serving, with the whole assembled entry, empty hosts (the server binds
+// every interface), a getter that resolves the device, and the serve context.
+func TestFrontEndInvocation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "fe.json")
+	port := freePort(t)
+	os.WriteFile(cfg, []byte(`{"driver":"dm-fe","port":`+itoa(port)+`,"lx200Port":14039}`), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- RunWith("dm-fe", Options{
+			Args: []string{"-config", cfg, "-discovery", "off", "-quiet"}, Stdout: io.Discard, Stderr: io.Discard, Context: ctx,
+		})
+	}()
+	waitUp(t, "http://127.0.0.1:"+itoa(port)+"/management/apiversions")
+	if dmFELast.calls != 1 {
+		t.Fatalf("FrontEnd calls = %d, want 1", dmFELast.calls)
+	}
+	if len(dmFELast.hosts) != 0 {
+		t.Fatalf("hosts = %v, want empty (every interface)", dmFELast.hosts)
+	}
+	if !strings.Contains(string(dmFELast.entry), `"lx200Port"`) {
+		t.Fatalf("entry missing the front-end key: %s", dmFELast.entry)
+	}
+	if dmFELast.dev() == nil {
+		t.Fatal("dev() returned nil for the served device")
+	}
+	if dmFELast.ctx.Err() != nil {
+		t.Fatal("front-end context cancelled while serving")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("RunWith: %v", err)
+	}
+	if dmFELast.ctx.Err() == nil {
+		t.Fatal("front-end context should end with the server")
+	}
+}
