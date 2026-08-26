@@ -342,8 +342,8 @@ func RunWith(driverName string, opt Options) error {
 	// Persist setup-page changes beside a device file when there is one, so a
 	// hand-run binary and the same file under an orchestrator share state; else
 	// under the per-user state directory.
-	if instance != "" {
-		_ = srv.SettingsPath(drv.Type, 0, filepath.Join(server.StateDir(drv.Name), "devices", instance+".json"))
+	if p := deviceStatePath(drv.Name, instance); p != "" {
+		_ = srv.SettingsPath(drv.Type, 0, p)
 	}
 
 	ctx := opt.Context
@@ -374,6 +374,20 @@ func RunWith(driverName string, opt Options) error {
 	defer stopReload()
 	logger.Printf("serving %s %q on :%d (discovery %s)", drv.Type, dev.Name(), portNum, strings.ToLower(*discovery))
 	return srv.Run(ctx)
+}
+
+// deviceStatePath is where a device's settings live: under the driver's state directory, keyed
+// by instance. Empty when there is no instance, since a run with no device file has no name to
+// key on and nothing to persist.
+//
+// Under systemd this resolves through $STATE_DIRECTORY rather than the driver name, so every
+// device an orchestrator launches shares one directory and is told apart by instance. Run the
+// same binary by hand and it lands under the per-user state directory instead.
+func deviceStatePath(driverName, instance string) string {
+	if instance == "" {
+		return ""
+	}
+	return filepath.Join(server.StateDir(driverName), "devices", instance+".json")
 }
 
 // ReadDeviceFile reads one device file: a JSON object that may carry // and

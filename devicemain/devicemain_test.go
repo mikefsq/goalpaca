@@ -453,3 +453,16 @@ func TestFrontEndInvocation(t *testing.T) {
 		t.Fatal("front-end context should end with the server")
 	}
 }
+
+// The driver's state file and the setup form's are one file.
+func TestDeviceStatePathIsTheSettingsFile(t *testing.T) {
+	t.Setenv("ALPACA_STATE_DIR", "/state")
+	got := deviceStatePath("rst", "rst")
+	want := filepath.Join("/state", "devices", "rst.json")
+	if got != want {
+		t.Errorf("deviceStatePath = %q, want %q", got, want)
+	}
+	if deviceStatePath("rst", "") != "" {
+		t.Errorf("no instance means no state file, got %q", deviceStatePath("rst", ""))
+	}
+}
