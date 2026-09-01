@@ -62,8 +62,8 @@ func coverCalibratorGet(member string, cc CoverCalibrator, _ params) (any, bool,
 func coverCalibratorPut(member string, cc CoverCalibrator, p params) (bool, error) {
 	switch member {
 	case "calibratoroff":
-		if cc.CalibratorState() == CalibratorNotPresent {
-			return true, notImplErr("CalibratorOff")
+		if err := GateCoverCalibratorCalibrator(cc, "CalibratorOff"); err != nil {
+			return true, err
 		}
 		return true, cc.CalibratorOff()
 	case "calibratoron":
@@ -71,26 +71,23 @@ func coverCalibratorPut(member string, cc CoverCalibrator, p params) (bool, erro
 		if err != nil {
 			return true, err
 		}
-		if cc.CalibratorState() == CalibratorNotPresent {
-			return true, notImplErr("CalibratorOn")
-		}
-		if max := cc.MaxBrightness(); n < 0 || n > max {
-			return true, invalidValuef("Brightness %d is outside the valid range 0 to %d", n, max)
+		if err := GateCoverCalibratorOn(cc, n); err != nil {
+			return true, err
 		}
 		return true, cc.CalibratorOn(n)
 	case "closecover":
-		if cc.CoverState() == CoverNotPresent {
-			return true, notImplErr("CloseCover")
+		if err := GateCoverCalibratorCover(cc, "CloseCover"); err != nil {
+			return true, err
 		}
 		return true, cc.CloseCover()
 	case "haltcover":
-		if cc.CoverState() == CoverNotPresent {
-			return true, notImplErr("HaltCover")
+		if err := GateCoverCalibratorCover(cc, "HaltCover"); err != nil {
+			return true, err
 		}
 		return true, cc.HaltCover()
 	case "opencover":
-		if cc.CoverState() == CoverNotPresent {
-			return true, notImplErr("OpenCover")
+		if err := GateCoverCalibratorCover(cc, "OpenCover"); err != nil {
+			return true, err
 		}
 		return true, cc.OpenCover()
 	}

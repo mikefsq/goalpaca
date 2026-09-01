@@ -68,8 +68,8 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !r.CanReverse() {
-			return true, notImplErr("Reverse")
+		if err := GateRotatorReverse(r); err != nil {
+			return true, err
 		}
 		return true, r.SetReverse(b)
 	case "halt":
@@ -86,8 +86,8 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 			return true, err
 		}
 		// IRotatorV3: absolute sky angles are 0 up to (not including) 360.
-		if f < 0 || f >= 360 {
-			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
+		if err := GateRotatorPosition(f); err != nil {
+			return true, err
 		}
 		return true, r.MoveAbsolute(f)
 	case "movemechanical":
@@ -95,8 +95,8 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if f < 0 || f >= 360 { // see moveabsolute
-			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
+		if err := GateRotatorPosition(f); err != nil { // see moveabsolute
+			return true, err
 		}
 		return true, r.MoveMechanical(f)
 	case "sync":
@@ -104,8 +104,8 @@ func rotatorPut(member string, r Rotator, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if f < 0 || f >= 360 { // see moveabsolute
-			return true, invalidValuef("Position %g is outside the valid range 0 to 359.999", f)
+		if err := GateRotatorPosition(f); err != nil { // see moveabsolute
+			return true, err
 		}
 		return true, r.Sync(f)
 	}

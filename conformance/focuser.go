@@ -78,9 +78,15 @@ func CheckFocuser(t *testing.T, f *client.Focuser) {
 		t.Errorf("Temperature() = %v, %v; want [-50, 50]", temp, err)
 	}
 
-	// StepSize - readable without error and positive.
-	if ss, err := f.StepSize(); err != nil || ss <= 0 {
-		t.Errorf("StepSize() = %v, %v; want > 0", ss, err)
+	// StepSize - positive when implemented; NotImplemented is spec-legal
+	// (IFocuserV3: a focuser that does not intrinsically know its step size
+	// must throw rather than guess).
+	if ss, err := f.StepSize(); err != nil {
+		if !errors.Is(err, server.ErrNotImplemented) {
+			t.Errorf("StepSize() error = %v; want a value or NotImplemented", err)
+		}
+	} else if ss <= 0 {
+		t.Errorf("StepSize() = %v; want > 0", ss)
 	}
 
 	// Position - in [0, MaxStep] for an absolute focuser.
@@ -110,33 +116,44 @@ func CheckFocuser(t *testing.T, f *client.Focuser) {
 		}
 	}
 
-	// Move out-of-range: an absolute focuser must clamp GRACEFULLY to the limit
-	// (no exception) — ConformU "Move - Below 0" / "Move - Above MaxStep".
-	if err := f.Move(-1000); err != nil {
-		t.Errorf("Move(-1000): want graceful clamp, got error %v", err)
+	// Move out-of-range: a driver may clamp gracefully to the limit (ConformU
+	// "Move - Below 0" / "Move - Above MaxStep") or reject with InvalidValue,
+	// leaving the position untouched — both are spec-legal; what it must not
+	// do is move somewhere else or fault differently.
+	checkOutOfRange := func(target, clamped, unchanged int) {
+		switch err := f.Move(target); {
+		case err == nil:
+			focuserWaitStopped(t, f)
+			if p, perr := f.Position(); perr != nil || p != clamped {
+				t.Errorf("Move(%d): Position = %v, %v; want %d (clamped)", target, p, perr, clamped)
+			}
+		case errors.Is(err, server.ErrInvalidValue):
+			if p, perr := f.Position(); perr != nil || p != unchanged {
+				t.Errorf("Move(%d) rejected: Position = %v, %v; want %d (unchanged)", target, p, perr, unchanged)
+			}
+		default:
+			t.Errorf("Move(%d): %v; want clamp or InvalidValue", target, err)
+		}
 	}
-	focuserWaitStopped(t, f)
-	if p, err := f.Position(); err != nil || p != 0 {
-		t.Errorf("Move(-1000): Position = %v, %v; want 0 (clamped)", p, err)
-	}
-	if err := f.Move(maxStep + 1000); err != nil {
-		t.Errorf("Move(MaxStep+1000): want graceful clamp, got error %v", err)
-	}
-	focuserWaitStopped(t, f)
-	if p, err := f.Position(); err != nil || p != maxStep {
-		t.Errorf("Move(MaxStep+1000): Position = %v, %v; want %d (clamped)", p, err, maxStep)
+	// Position is maxStep here (previous check); a rejected move leaves it so.
+	checkOutOfRange(-1000, 0, maxStep)
+	if p, _ := f.Position(); p == 0 {
+		checkOutOfRange(maxStep+1000, maxStep, 0)
+	} else {
+		checkOutOfRange(maxStep+1000, maxStep, maxStep)
 	}
 
-	// Halt: start a move and confirm Halt stops it.
+	// Halt: confirm it stops a move where implemented; NotImplemented is
+	// spec-legal (IFocuserV3: a focuser that cannot halt must throw).
 	if err := f.Move(0); err != nil {
 		t.Errorf("Move(0) for Halt test: %v", err)
 	}
-	if err := f.Halt(); err != nil {
-		t.Errorf("Halt(): %v", err)
+	if err := f.Halt(); err != nil && !errors.Is(err, server.ErrNotImplemented) {
+		t.Errorf("Halt(): %v; want success or NotImplemented", err)
 	}
 	focuserWaitStopped(t, f)
 	if m, err := f.IsMoving(); err != nil || m {
-		t.Errorf("IsMoving() after Halt = %v, %v; want false", m, err)
+		t.Errorf("IsMoving() after Halt/settle = %v, %v; want false", m, err)
 	}
 
 	// TempComp write (available on the sim): set true then false and verify.

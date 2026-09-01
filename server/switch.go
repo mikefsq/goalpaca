@@ -78,7 +78,7 @@ func switchGet(member string, sw Switch, p params) (any, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	if err := validSwitchID(sw, id); err != nil {
+	if err := GateSwitchID(sw, id); err != nil {
 		return nil, true, err
 	}
 	v, err := fn(id)
@@ -129,13 +129,13 @@ func switchPut(member string, sw Switch, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchID(sw, id); err != nil {
 			return true, err
 		}
 		return true, sw.SetSwitch(id, state)
 	case "setswitchname":
 		name, _ := p.get("Name")
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchID(sw, id); err != nil {
 			return true, err
 		}
 		return true, sw.SetSwitchName(id, name)
@@ -144,13 +144,8 @@ func switchPut(member string, sw Switch, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchValue(sw, id, value); err != nil {
 			return true, err
-		}
-		if min, err := sw.MinSwitchValue(id); err == nil {
-			if max, merr := sw.MaxSwitchValue(id); merr == nil && (value < min || value > max) {
-				return true, invalidValuef("switch %d value %g is outside the valid range %g to %g", id, value, min, max)
-			}
 		}
 		return true, sw.SetSwitchValue(id, value)
 	case "setasync":
@@ -158,10 +153,10 @@ func switchPut(member string, sw Switch, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchID(sw, id); err != nil {
 			return true, err
 		}
-		if err := switchAsyncGate(sw, id, "SetAsync"); err != nil {
+		if err := GateSwitchAsync(sw, id, "SetAsync"); err != nil {
 			return true, err
 		}
 		return true, sw.SetAsync(id, state)
@@ -170,10 +165,10 @@ func switchPut(member string, sw Switch, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchID(sw, id); err != nil {
 			return true, err
 		}
-		if err := switchAsyncGate(sw, id, "SetAsyncValue"); err != nil {
+		if err := GateSwitchAsync(sw, id, "SetAsyncValue"); err != nil {
 			return true, err
 		}
 		if min, err := sw.MinSwitchValue(id); err == nil {
@@ -183,10 +178,10 @@ func switchPut(member string, sw Switch, p params) (bool, error) {
 		}
 		return true, sw.SetAsyncValue(id, value)
 	case "cancelasync":
-		if err := validSwitchID(sw, id); err != nil {
+		if err := GateSwitchID(sw, id); err != nil {
 			return true, err
 		}
-		if err := switchAsyncGate(sw, id, "CancelAsync"); err != nil {
+		if err := GateSwitchAsync(sw, id, "CancelAsync"); err != nil {
 			return true, err
 		}
 		return true, sw.CancelAsync(id)

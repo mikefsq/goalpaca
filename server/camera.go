@@ -74,6 +74,17 @@ type Camera interface {
 	OffsetMin() int
 	OffsetMax() int
 	Offsets() ([]string, error) // NotImplemented in value (Offset min/max) mode
+	// CanGain / CanOffset are capability flags consulted by the dispatch
+	// layer, not Alpaca members: ASCOM expresses an absent gain by the Gain
+	// property itself throwing NotImplemented, which the int-typed getters
+	// here cannot do. When false, the whole family (value, min, max, list,
+	// setter) answers NotImplemented without the driver being called. They
+	// exist for devices whose gain support is only known at runtime (e.g. a
+	// protocol bridge that could not resolve a gain source); BaseCamera
+	// returns true, so drivers that implement gain by overriding only the
+	// getters are unaffected.
+	CanGain() bool
+	CanOffset() bool
 
 	// Readout modes
 	ReadoutMode() int

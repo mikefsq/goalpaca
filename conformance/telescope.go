@@ -55,8 +55,10 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	}
 	if sys, err := c.EquatorialSystem(); err != nil {
 		t.Errorf("EquatorialSystem(): %v", err)
-	} else if sys != server.EquJ2000 {
-		t.Errorf("EquatorialSystem() = %v; want EquJ2000", sys)
+	} else if sys < server.EquOther || sys > server.EquB1950 {
+		// ConformU requires a valid declared system, not a particular one —
+		// a JNow (topocentric) mount is as conformant as a J2000 one.
+		t.Errorf("EquatorialSystem() = %v; want a valid EquatorialCoordinateType", sys)
 	}
 	if _, err := c.SideOfPier(); err != nil {
 		t.Errorf("SideOfPier(): %v", err)
@@ -159,11 +161,18 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 				t.Errorf("%s while parked: want Parked (0x408), got %v", name, err)
 			}
 		}
+		// Optional members answer NotImplemented ahead of the parked gate —
+		// ConformU accepts either for a capability the device does not offer.
+		wantParkedOrAbsent := func(name string, err error) {
+			if !errors.Is(err, server.ErrParked) && !errors.Is(err, server.ErrNotImplemented) {
+				t.Errorf("%s while parked: want Parked (0x408) or NotImplemented, got %v", name, err)
+			}
+		}
 		wantParked("AbortSlew", c.AbortSlew())
 		wantParked("SlewToCoordinatesAsync", c.SlewToCoordinatesAsync(12, 45))
-		wantParked("SlewToAltAzAsync", c.SlewToAltAzAsync(180, 45))
+		wantParkedOrAbsent("SlewToAltAzAsync", c.SlewToAltAzAsync(180, 45))
 		wantParked("SyncToCoordinates", c.SyncToCoordinates(12, 45))
-		wantParked("SyncToAltAz", c.SyncToAltAz(180, 45))
+		wantParkedOrAbsent("SyncToAltAz", c.SyncToAltAz(180, 45))
 		wantParked("MoveAxis", c.MoveAxis(server.AxisPrimary, 1))
 		wantParked("PulseGuide", c.PulseGuide(server.GuideNorth, 10))
 		wantParked("FindHome", c.FindHome())
@@ -267,8 +276,12 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 		}
 	}
 
-	// DestinationSideOfPier returns a value without error.
-	if _, err := c.DestinationSideOfPier(6, 0); err != nil {
+	// DestinationSideOfPier is optional: ConformU accepts NotImplemented — a
+	// bridge or driver that cannot know the mount's flip model must not guess.
+	dsopImplemented := true
+	if _, err := c.DestinationSideOfPier(6, 0); errors.Is(err, server.ErrNotImplemented) {
+		dsopImplemented = false
+	} else if err != nil {
 		t.Errorf("DestinationSideOfPier(6, 0): %v", err)
 	}
 
@@ -277,10 +290,12 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 	telescopeAssertCan(t, "CanSetDeclinationRate", c.CanSetDeclinationRate)
 	telescopeAssertCan(t, "CanSetRightAscensionRate", c.CanSetRightAscensionRate)
 	telescopeAssertCan(t, "CanSetPark", c.CanSetPark)
-	telescopeAssertCan(t, "CanSetPierSide", c.CanSetPierSide)
-	telescopeAssertCan(t, "CanSlewAltAz", c.CanSlewAltAz)
-	telescopeAssertCan(t, "CanSlewAltAzAsync", c.CanSlewAltAzAsync)
-	telescopeAssertCan(t, "CanSyncAltAz", c.CanSyncAltAz)
+	// Optional capabilities: ConformU requires the flag readable, not true —
+	// most mounts expose no pier-side control and many no alt/az slewing.
+	telescopeReadCan(t, "CanSetPierSide", c.CanSetPierSide)
+	telescopeReadCan(t, "CanSlewAltAz", c.CanSlewAltAz)
+	telescopeReadCan(t, "CanSlewAltAzAsync", c.CanSlewAltAzAsync)
+	telescopeReadCan(t, "CanSyncAltAz", c.CanSyncAltAz)
 	if can, err := c.CanMoveAxis(server.AxisSecondary); err != nil || !can {
 		t.Errorf("CanMoveAxis(AxisSecondary) = %v, %v; want true", can, err)
 	}
@@ -351,19 +366,23 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 		t.Errorf("DeclinationRate() after set = %v, %v; want ~0", dr, err)
 	}
 
-	// DoesRefraction: read, toggle+read-back, restore.
+	// DoesRefraction: read; the toggle is optional (ConformU: a device that
+	// does not model refraction answers NotImplemented on the write).
 	refr, err := c.DoesRefraction()
 	if err != nil {
 		t.Errorf("DoesRefraction(): %v", err)
 	}
-	if err := c.SetDoesRefraction(!refr); err != nil {
+	if err := c.SetDoesRefraction(!refr); errors.Is(err, server.ErrNotImplemented) {
+		// not offered — nothing further to check
+	} else if err != nil {
 		t.Errorf("SetDoesRefraction(toggle): %v", err)
-	}
-	if got, err := c.DoesRefraction(); err != nil || got != !refr {
-		t.Errorf("DoesRefraction() after toggle = %v, %v; want %v", got, err, !refr)
-	}
-	if err := c.SetDoesRefraction(refr); err != nil {
-		t.Errorf("SetDoesRefraction(restore): %v", err)
+	} else {
+		if got, err := c.DoesRefraction(); err != nil || got != !refr {
+			t.Errorf("DoesRefraction() after toggle = %v, %v; want %v", got, err, !refr)
+		}
+		if err := c.SetDoesRefraction(refr); err != nil {
+			t.Errorf("SetDoesRefraction(restore): %v", err)
+		}
 	}
 
 	// SlewSettleTime: read, write+read-back, restore, negative rejection.
@@ -394,17 +413,20 @@ func CheckTelescope(t *testing.T, c *client.Telescope) {
 		t.Errorf("SetTrackingRate(DriveSidereal): %v", err)
 	}
 
-	// DestinationSideOfPier varies with RA and is never PierUnknown.
-	east, eerr := c.DestinationSideOfPier(6, 0)
-	west, werr := c.DestinationSideOfPier(18, 0)
-	if eerr != nil || werr != nil {
-		t.Errorf("DestinationSideOfPier: %v, %v", eerr, werr)
-	}
-	if east == server.PierUnknown || west == server.PierUnknown {
-		t.Errorf("DestinationSideOfPier = %v, %v; neither should be PierUnknown", east, west)
-	}
-	if east == west {
-		t.Errorf("DestinationSideOfPier(6,0)=%v and (18,0)=%v; want different", east, west)
+	// DestinationSideOfPier, where offered, varies with RA and is never
+	// PierUnknown.
+	if dsopImplemented {
+		east, eerr := c.DestinationSideOfPier(6, 0)
+		west, werr := c.DestinationSideOfPier(18, 0)
+		if eerr != nil || werr != nil {
+			t.Errorf("DestinationSideOfPier: %v, %v", eerr, werr)
+		}
+		if east == server.PierUnknown || west == server.PierUnknown {
+			t.Errorf("DestinationSideOfPier = %v, %v; neither should be PierUnknown", east, west)
+		}
+		if east == west {
+			t.Errorf("DestinationSideOfPier(6,0)=%v and (18,0)=%v; want different", east, west)
+		}
 	}
 
 	// Async slew reports Slewing()==true immediately after the call returns.
@@ -523,6 +545,18 @@ func telescopeAssertCan(t *testing.T, name string, read func() (bool, error)) {
 	if v, err := read(); err != nil || !v {
 		t.Errorf("%s() = %v, %v; want true", name, v, err)
 	}
+}
+
+// telescopeReadCan reads an optional capability flag, requiring only that the
+// read succeeds — the value is the device's own answer (ConformU asserts
+// readability, then tests members only where the device claims them).
+func telescopeReadCan(t *testing.T, name string, read func() (bool, error)) bool {
+	t.Helper()
+	v, err := read()
+	if err != nil {
+		t.Errorf("%s(): %v", name, err)
+	}
+	return v
 }
 
 // telescopeWaitSlewDone polls Slewing() until it reports false or times out.

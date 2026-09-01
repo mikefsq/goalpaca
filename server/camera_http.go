@@ -26,14 +26,14 @@ func cameraGet(member string, c Camera, _ params) (any, bool, error) {
 		return int(c.SensorType()), true, nil
 	case "bayeroffsetx":
 		// ICameraV4: monochrome sensors must report NotImplemented, never a value.
-		if c.SensorType() == SensorMonochrome {
-			return nil, true, notImplErr("BayerOffsetX")
+		if err := GateCameraBayerOffset(c, "BayerOffsetX"); err != nil {
+			return nil, true, err
 		}
 		v, err := c.BayerOffsetX()
 		return v, true, err
 	case "bayeroffsety":
-		if c.SensorType() == SensorMonochrome {
-			return nil, true, notImplErr("BayerOffsetY")
+		if err := GateCameraBayerOffset(c, "BayerOffsetY"); err != nil {
+			return nil, true, err
 		}
 		v, err := c.BayerOffsetY()
 		return v, true, err
@@ -91,21 +91,45 @@ func cameraGet(member string, c Camera, _ params) (any, bool, error) {
 
 	// Gain / Offset
 	case "gain":
+		if err := GateCameraGain(c, "Gain"); err != nil {
+			return nil, true, err
+		}
 		return c.Gain(), true, nil
 	case "gainmin":
+		if err := GateCameraGain(c, "GainMin"); err != nil {
+			return nil, true, err
+		}
 		return c.GainMin(), true, nil
 	case "gainmax":
+		if err := GateCameraGain(c, "GainMax"); err != nil {
+			return nil, true, err
+		}
 		return c.GainMax(), true, nil
 	case "gains":
+		if err := GateCameraGain(c, "Gains"); err != nil {
+			return nil, true, err
+		}
 		v, err := c.Gains()
 		return v, true, err
 	case "offset":
+		if err := GateCameraOffset(c, "Offset"); err != nil {
+			return nil, true, err
+		}
 		return c.Offset(), true, nil
 	case "offsetmin":
+		if err := GateCameraOffset(c, "OffsetMin"); err != nil {
+			return nil, true, err
+		}
 		return c.OffsetMin(), true, nil
 	case "offsetmax":
+		if err := GateCameraOffset(c, "OffsetMax"); err != nil {
+			return nil, true, err
+		}
 		return c.OffsetMax(), true, nil
 	case "offsets":
+		if err := GateCameraOffset(c, "Offsets"); err != nil {
+			return nil, true, err
+		}
 		v, err := c.Offsets()
 		return v, true, err
 
@@ -115,8 +139,8 @@ func cameraGet(member string, c Camera, _ params) (any, bool, error) {
 	case "readoutmodes":
 		return c.ReadoutModes(), true, nil
 	case "fastreadout":
-		if !c.CanFastReadout() {
-			return nil, true, notImplErr("FastReadout")
+		if err := GateCameraFastReadout(c, "FastReadout"); err != nil {
+			return nil, true, err
 		}
 		v, err := c.FastReadout()
 		return v, true, err
@@ -133,8 +157,8 @@ func cameraGet(member string, c Camera, _ params) (any, bool, error) {
 	case "cooleron":
 		return c.CoolerOn(), true, nil
 	case "coolerpower":
-		if !c.CanGetCoolerPower() {
-			return nil, true, notImplErr("CoolerPower")
+		if err := GateCameraCoolerPower(c); err != nil {
+			return nil, true, err
 		}
 		v, err := c.CoolerPower()
 		return v, true, err
@@ -164,8 +188,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if max := c.MaxBinX(); n < 1 || n > max {
-			return true, invalidValuef("BinX %d is outside the valid range 1 to %d", n, max)
+		if err := GateCameraSetBinX(c, n); err != nil {
+			return true, err
 		}
 		return true, c.SetBinX(n)
 	case "biny":
@@ -173,8 +197,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if max := c.MaxBinY(); n < 1 || n > max {
-			return true, invalidValuef("BinY %d is outside the valid range 1 to %d", n, max)
+		if err := GateCameraSetBinY(c, n); err != nil {
+			return true, err
 		}
 		return true, c.SetBinY(n)
 
@@ -184,8 +208,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if n < 0 {
-			return true, invalidValuef("StartX %d is negative", n)
+		if err := GateCameraSubframeOrigin("StartX", n); err != nil {
+			return true, err
 		}
 		return true, c.SetStartX(n)
 	case "starty":
@@ -193,8 +217,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if n < 0 {
-			return true, invalidValuef("StartY %d is negative", n)
+		if err := GateCameraSubframeOrigin("StartY", n); err != nil {
+			return true, err
 		}
 		return true, c.SetStartY(n)
 	case "numx":
@@ -202,8 +226,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if n < 0 {
-			return true, invalidValuef("NumX %d is negative", n)
+		if err := GateCameraSubframeSize("NumX", n); err != nil {
+			return true, err
 		}
 		return true, c.SetNumX(n)
 	case "numy":
@@ -211,8 +235,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if n < 0 {
-			return true, invalidValuef("NumY %d is negative", n)
+		if err := GateCameraSubframeSize("NumY", n); err != nil {
+			return true, err
 		}
 		return true, c.SetNumY(n)
 
@@ -224,12 +248,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		}
 		// In "Gains list" mode the value is an index into Gains; in
 		// "Gain value" mode (Gains errors) it is bounded by GainMin/GainMax.
-		if gains, gerr := c.Gains(); gerr == nil {
-			if n < 0 || n >= len(gains) {
-				return true, invalidValuef("Gain index %d is outside the Gains list (0 to %d)", n, len(gains)-1)
-			}
-		} else if min, max := c.GainMin(), c.GainMax(); n < min || n > max {
-			return true, invalidValuef("Gain %d is outside the valid range %d to %d", n, min, max)
+		if err := GateCameraSetGain(c, n); err != nil {
+			return true, err
 		}
 		return true, c.SetGain(n)
 	case "offset":
@@ -237,12 +257,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if offsets, oerr := c.Offsets(); oerr == nil { // see gain
-			if n < 0 || n >= len(offsets) {
-				return true, invalidValuef("Offset index %d is outside the Offsets list (0 to %d)", n, len(offsets)-1)
-			}
-		} else if min, max := c.OffsetMin(), c.OffsetMax(); n < min || n > max {
-			return true, invalidValuef("Offset %d is outside the valid range %d to %d", n, min, max)
+		if err := GateCameraSetOffset(c, n); err != nil { // see gain
+			return true, err
 		}
 		return true, c.SetOffset(n)
 	case "readoutmode":
@@ -250,8 +266,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if modes := c.ReadoutModes(); n < 0 || n >= len(modes) {
-			return true, invalidValuef("ReadoutMode %d is outside the ReadoutModes list (0 to %d)", n, len(modes)-1)
+		if err := GateCameraSetReadoutMode(c, n); err != nil {
+			return true, err
 		}
 		return true, c.SetReadoutMode(n)
 	case "fastreadout":
@@ -259,8 +275,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !c.CanFastReadout() {
-			return true, notImplErr("FastReadout")
+		if err := GateCameraSetFastReadout(c); err != nil {
+			return true, err
 		}
 		return true, c.SetFastReadout(b)
 
@@ -276,14 +292,10 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !c.CanSetCCDTemperature() {
-			return true, notImplErr("SetCCDTemperature")
-		}
-		// Physically impossible set points are rejected here (ConformU flags
-		// -273.15 °C and 100 °C as "silly" limits); the driver applies its
-		// hardware's actual, narrower range.
-		if f < -273.15 || f >= 100 {
-			return true, invalidValuef("SetCCDTemperature %g is outside the physically plausible range -273.15 to 100", f)
+		// The capability, then the physically plausible range (ConformU flags -273.15 °C and
+		// 100 °C as "silly" limits); the driver applies its hardware's actual, narrower range.
+		if err := GateCameraSetCCDTemperature(c, f); err != nil {
+			return true, err
 		}
 		return true, c.SetSetCCDTemperature(f)
 
@@ -297,21 +309,21 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if dur < 0 {
-			return true, invalidValuef("Duration %g is negative", dur)
+		if err := GateCameraStartExposure(dur); err != nil {
+			return true, err
 		}
 		if err := validSubframe(c); err != nil {
 			return true, err
 		}
 		return true, c.StartExposure(dur, light)
 	case "stopexposure":
-		if !c.CanStopExposure() {
-			return true, notImplErr("StopExposure")
+		if err := GateCameraStopExposure(c); err != nil {
+			return true, err
 		}
 		return true, c.StopExposure()
 	case "abortexposure":
-		if !c.CanAbortExposure() {
-			return true, notImplErr("AbortExposure")
+		if err := GateCameraAbortExposure(c); err != nil {
+			return true, err
 		}
 		return true, c.AbortExposure()
 	case "subexposureduration":
@@ -319,8 +331,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if f < 0 {
-			return true, invalidValuef("SubExposureDuration %g is negative", f)
+		if err := GateCameraSubExposureDuration(f); err != nil {
+			return true, err
 		}
 		return true, c.SetSubExposureDuration(f)
 
@@ -334,14 +346,8 @@ func cameraPut(member string, c Camera, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !c.CanPulseGuide() {
-			return true, notImplErr("PulseGuide")
-		}
-		if dir < int(GuideNorth) || dir > int(GuideWest) {
-			return true, invalidValuef("Direction %d is not a valid guide direction", dir)
-		}
-		if dur < 0 {
-			return true, invalidValuef("Duration %d is negative", dur)
+		if err := GateCameraPulseGuide(c, GuideDirection(dir), dur); err != nil {
+			return true, err
 		}
 		return true, c.PulseGuide(GuideDirection(dir), dur)
 	}

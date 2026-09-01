@@ -84,6 +84,12 @@ func (c *BaseCamera) OffsetMin() int             { return 0 }
 func (c *BaseCamera) OffsetMax() int             { return 0 }
 func (c *BaseCamera) Offsets() ([]string, error) { return nil, ErrNotImplemented }
 
+// CanGain / CanOffset default to true, unlike the other Can flags: the gated
+// getters cannot express absence themselves, so gating is opt-in and the
+// default preserves the behaviour of every driver that predates the flags.
+func (c *BaseCamera) CanGain() bool   { return true }
+func (c *BaseCamera) CanOffset() bool { return true }
+
 // Readout modes
 func (c *BaseCamera) ReadoutMode() int           { return 0 }
 func (c *BaseCamera) SetReadoutMode(int) error   { return ErrNotImplemented }

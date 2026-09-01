@@ -95,8 +95,10 @@ func TestBusyGating(t *testing.T) {
 // fakeTelescope is a minimal Busyable telescope for the motion-interrupt gating test.
 type fakeTelescope struct {
 	BaseTelescope
-	busy    bool
-	aborted bool
+	busy        bool
+	aborted     bool
+	movedAxis   bool
+	movedAxisAt float64
 }
 
 func (t *fakeTelescope) Busy() bool { return t.busy }
@@ -104,7 +106,18 @@ func (t *fakeTelescope) AbortSlew() error {
 	t.aborted = true
 	return nil
 }
-func (t *fakeTelescope) MoveAxis(TelescopeAxis, float64) error { return nil }
+func (t *fakeTelescope) CanMoveAxis(TelescopeAxis) bool { return true }
+
+// AxisRates has to advertise the rate the test uses: MoveAxis is gated on the rate falling inside
+// one of the device's published ranges, and BaseTelescope publishes none — so without this the
+// request is refused with InvalidValue before the busy gate is ever reached.
+func (t *fakeTelescope) AxisRates(TelescopeAxis) []AxisRate {
+	return []AxisRate{{Minimum: 0.1, Maximum: 5}}
+}
+func (t *fakeTelescope) MoveAxis(_ TelescopeAxis, rate float64) error {
+	t.movedAxisAt, t.movedAxis = rate, true
+	return nil
+}
 
 func newFakeTelescope() *fakeTelescope {
 	tel := &fakeTelescope{}
@@ -134,9 +147,26 @@ func TestBusyGatingTelescopeMotion(t *testing.T) {
 		t.Error("busy abortslew did not reach the device")
 	}
 
-	// MoveAxis (an initiator) stays gated while busy.
-	if mr := put(t, s, "/api/v1/telescope/0/moveaxis", url.Values{"Axis": {"0"}, "Rate": {"1.5"}}); mr.ErrorNumber != ErrNumInvalidOperation {
-		t.Errorf("busy moveaxis ErrorNumber = %#x, want InvalidOperation %#x", mr.ErrorNumber, ErrNumInvalidOperation)
+	// MoveAxis must also reach a busy device, and this assertion was BACKWARDS until the
+	// exemption that makes it true was added.
+	//
+	// It used to require InvalidOperation, on the reading that MoveAxis is an initiator like any
+	// other. interruptMembers now exempts it, with the reason recorded there: ASCOM defines rate 0
+	// as the stop for an axis already in motion (ConformU stops exactly that way), and a rate
+	// CHANGE mid-move is legal too. A MoveAxis that cannot reach a moving mount is a mount that
+	// cannot be slowed or stopped through the axis it is moving on.
+	//
+	// The test kept failing rather than being noticed because it also needed CanMoveAxis on the
+	// fake — BaseTelescope answers false — so the request was refused with NotImplemented and the
+	// busy gate never came into it either way.
+	if mr := put(t, s, "/api/v1/telescope/0/moveaxis", url.Values{"Axis": {"0"}, "Rate": {"1.5"}}); mr.ErrorNumber != 0 {
+		t.Errorf("busy moveaxis ErrorNumber = %#x, want success", mr.ErrorNumber)
+	}
+	if !tel.movedAxis {
+		t.Error("busy moveaxis did not reach the device, so a moving mount cannot be slowed or stopped")
+	}
+	if tel.movedAxisAt != 1.5 {
+		t.Errorf("moveaxis reached the device at rate %g, want 1.5", tel.movedAxisAt)
 	}
 }
 

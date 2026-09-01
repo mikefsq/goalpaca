@@ -284,6 +284,65 @@ func TestGateCamera(t *testing.T) {
 	}
 }
 
+// --- gain-less camera: CanGain/CanOffset off, getters left at Base defaults ---
+
+type gainlessCamera struct {
+	BaseCamera
+	setterCalled bool
+}
+
+func newGainlessCamera() *gainlessCamera {
+	c := &gainlessCamera{}
+	c.ID = "gainless-cam"
+	c.DevName = "GainlessCam"
+	c.IfaceVer = 4
+	c.MarkConnected()
+	return c
+}
+
+func (c *gainlessCamera) CanGain() bool     { return false }
+func (c *gainlessCamera) CanOffset() bool   { return false }
+func (c *gainlessCamera) SetGain(int) error { c.setterCalled = true; return nil }
+
+func TestGateGainOffsetCapability(t *testing.T) {
+	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	cam := newGainlessCamera()
+	if err := s.Register(CameraType, 0, cam); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// The whole family answers NotImplemented, and Gain must NOT read as 0 —
+	// a client treats a zero as a real setting and writes it into headers.
+	for _, m := range []string{
+		"gain", "gainmin", "gainmax", "gains",
+		"offset", "offsetmin", "offsetmax", "offsets",
+	} {
+		if vr := getValue(t, s, "/api/v1/camera/0/"+m); vr.ErrorNumber != ErrNumNotImplemented {
+			t.Errorf("GET %s with CanGain/CanOffset=false ErrorNumber = %#x, want NotImplemented",
+				m, vr.ErrorNumber)
+		}
+	}
+	if mr := put(t, s, "/api/v1/camera/0/gain", url.Values{"Gain": {"10"}}); mr.ErrorNumber != ErrNumNotImplemented {
+		t.Errorf("PUT gain with CanGain=false ErrorNumber = %#x, want NotImplemented", mr.ErrorNumber)
+	}
+	if mr := put(t, s, "/api/v1/camera/0/offset", url.Values{"Offset": {"10"}}); mr.ErrorNumber != ErrNumNotImplemented {
+		t.Errorf("PUT offset with CanOffset=false ErrorNumber = %#x, want NotImplemented", mr.ErrorNumber)
+	}
+	if cam.setterCalled {
+		t.Error("PUT gain reached the driver; the capability gate must reject it first")
+	}
+
+	// Default (BaseCamera) is CanGain=true: naiveCamera's gain keeps serving,
+	// so the flags are backward-compatible for drivers that predate them.
+	s2 := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
+	if err := s2.Register(CameraType, 0, newNaiveCamera()); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if vr := getValue(t, s2, "/api/v1/camera/0/gain"); vr.ErrorNumber != 0 {
+		t.Errorf("GET gain with default CanGain ErrorNumber = %#x, want success", vr.ErrorNumber)
+	}
+}
+
 // --- naive switch: accepts every id ---
 
 type naiveSwitch struct {

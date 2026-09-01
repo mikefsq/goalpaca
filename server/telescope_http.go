@@ -149,12 +149,9 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetDeclinationRate() {
-			return true, notImplErr("DeclinationRate")
-		}
 		// ITelescopeV4: rate offsets can only be set when tracking at Sidereal.
-		if t.TrackingRate() != DriveSidereal {
-			return true, invalidOpErr("DeclinationRate can only be set when tracking at the Sidereal rate")
+		if err := GateTelescopeDeclinationRate(t); err != nil {
+			return true, err
 		}
 		return true, t.SetDeclinationRate(f)
 	case "doesrefraction":
@@ -168,11 +165,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetGuideRates() {
-			return true, notImplErr("GuideRateDeclination")
-		}
-		if f < 0 {
-			return true, invalidValuef("GuideRateDeclination %g is negative", f)
+		if err := GateTelescopeGuideRate(t, "GuideRateDeclination", f); err != nil {
+			return true, err
 		}
 		return true, t.SetGuideRateDeclination(f)
 	case "guideraterightascension":
@@ -180,11 +174,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetGuideRates() {
-			return true, notImplErr("GuideRateRightAscension")
-		}
-		if f < 0 {
-			return true, invalidValuef("GuideRateRightAscension %g is negative", f)
+		if err := GateTelescopeGuideRate(t, "GuideRateRightAscension", f); err != nil {
+			return true, err
 		}
 		return true, t.SetGuideRateRightAscension(f)
 	case "rightascensionrate":
@@ -192,11 +183,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetRightAscensionRate() {
-			return true, notImplErr("RightAscensionRate")
-		}
-		if t.TrackingRate() != DriveSidereal { // see declinationrate
-			return true, invalidOpErr("RightAscensionRate can only be set when tracking at the Sidereal rate")
+		if err := GateTelescopeRightAscensionRate(t); err != nil { // see declinationrate
+			return true, err
 		}
 		return true, t.SetRightAscensionRate(f)
 	case "sideofpier":
@@ -204,11 +192,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetPierSide() {
-			return true, notImplErr("SideOfPier")
-		}
-		if n != int(PierEast) && n != int(PierWest) {
-			return true, invalidValuef("SideOfPier %d is not a valid pier side", n)
+		if err := GateTelescopeSideOfPier(t, PierSide(n)); err != nil {
+			return true, err
 		}
 		return true, t.SetSideOfPier(PierSide(n))
 	case "siteelevation":
@@ -216,7 +201,7 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := invalidRange("SiteElevation", f, -300, 10000); err != nil {
+		if err := GateTelescopeSiteElevation(f); err != nil {
 			return true, err
 		}
 		return true, t.SetSiteElevation(f)
@@ -225,7 +210,7 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := invalidRange("SiteLatitude", f, -90, 90); err != nil {
+		if err := GateTelescopeSiteLatitude(f); err != nil {
 			return true, err
 		}
 		return true, t.SetSiteLatitude(f)
@@ -234,7 +219,7 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := invalidRange("SiteLongitude", f, -180, 180); err != nil {
+		if err := GateTelescopeSiteLongitude(f); err != nil {
 			return true, err
 		}
 		return true, t.SetSiteLongitude(f)
@@ -243,8 +228,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if n < 0 {
-			return true, invalidValuef("SlewSettleTime %d is negative", n)
+		if err := GateTelescopeSlewSettleTime(n); err != nil {
+			return true, err
 		}
 		return true, t.SetSlewSettleTime(n)
 	case "targetdeclination":
@@ -252,7 +237,7 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := invalidRange("TargetDeclination", f, -90, 90); err != nil {
+		if err := GateTelescopeTargetDeclination(f); err != nil {
 			return true, err
 		}
 		return true, t.SetTargetDeclination(f)
@@ -261,8 +246,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if f < 0 || f >= 24 {
-			return true, invalidValuef("TargetRightAscension %g is outside the valid range 0 to 23.999", f)
+		if err := GateTelescopeTargetRightAscension(f); err != nil {
+			return true, err
 		}
 		return true, t.SetTargetRightAscension(f)
 	case "tracking":
@@ -270,11 +255,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSetTracking() {
-			return true, notImplErr("Tracking")
-		}
-		if b && t.AtPark() {
-			return true, parkedErr("Tracking = true")
+		if err := GateTelescopeTracking(t, b); err != nil {
+			return true, err
 		}
 		return true, t.SetTracking(b)
 	case "trackingrate":
@@ -282,8 +264,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !validDriveRate(t, DriveRate(n)) {
-			return true, invalidValuef("TrackingRate %d is not a supported drive rate", n)
+		if err := GateTelescopeTrackingRate(t, DriveRate(n)); err != nil {
+			return true, err
 		}
 		return true, t.SetTrackingRate(DriveRate(n))
 	case "utcdate":
@@ -291,23 +273,20 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if err := parseUTCDate(v); err != nil {
+		if err := GateTelescopeUTCDate(v); err != nil {
 			return true, err
 		}
 		return true, t.SetUTCDate(v)
 
 	// Methods
 	case "abortslew":
-		if t.AtPark() {
-			return true, parkedErr("AbortSlew")
+		if err := GateTelescopeAbortSlew(t); err != nil {
+			return true, err
 		}
 		return true, t.AbortSlew()
 	case "findhome":
-		if !t.CanFindHome() {
-			return true, notImplErr("FindHome")
-		}
-		if t.AtPark() {
-			return true, parkedErr("FindHome")
+		if err := GateTelescopeFindHome(t); err != nil {
+			return true, err
 		}
 		return true, t.FindHome()
 	case "moveaxis":
@@ -319,22 +298,13 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if axis < int(AxisPrimary) || axis > int(AxisTertiary) {
-			return true, invalidValuef("Axis %d is not a valid telescope axis", axis)
-		}
-		if !t.CanMoveAxis(TelescopeAxis(axis)) {
-			return true, notImplErr("MoveAxis")
-		}
-		if !validAxisRate(t, TelescopeAxis(axis), rate) {
-			return true, invalidValuef("Rate %g is outside the axis' supported ranges", rate)
-		}
-		if t.AtPark() {
-			return true, parkedErr("MoveAxis")
+		if err := GateTelescopeMoveAxis(t, TelescopeAxis(axis), rate); err != nil {
+			return true, err
 		}
 		return true, t.MoveAxis(TelescopeAxis(axis), rate)
 	case "park":
-		if !t.CanPark() {
-			return true, notImplErr("Park")
+		if err := GateTelescopePark(t); err != nil {
+			return true, err
 		}
 		return true, t.Park()
 	case "pulseguide":
@@ -346,22 +316,13 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanPulseGuide() {
-			return true, notImplErr("PulseGuide")
-		}
-		if dir < int(GuideNorth) || dir > int(GuideWest) {
-			return true, invalidValuef("Direction %d is not a valid guide direction", dir)
-		}
-		if dur < 0 {
-			return true, invalidValuef("Duration %d is negative", dur)
-		}
-		if t.AtPark() {
-			return true, parkedErr("PulseGuide")
+		if err := GateTelescopePulseGuide(t, GuideDirection(dir), dur); err != nil {
+			return true, err
 		}
 		return true, t.PulseGuide(GuideDirection(dir), dur)
 	case "setpark":
-		if !t.CanSetPark() {
-			return true, notImplErr("SetPark")
+		if err := GateTelescopeSetPark(t); err != nil {
+			return true, err
 		}
 		return true, t.SetPark()
 	case "slewtoaltaz":
@@ -369,14 +330,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSlewAltAz() {
-			return true, notImplErr("SlewToAltAz")
-		}
-		if err := validAltAz(az, alt); err != nil {
+		if err := GateTelescopeSlewToAltAz(t, "SlewToAltAz", t.CanSlewAltAz(), az, alt); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToAltAz")
 		}
 		return true, t.SlewToAltAz(az, alt)
 	case "slewtoaltazasync":
@@ -384,14 +339,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSlewAltAzAsync() {
-			return true, notImplErr("SlewToAltAzAsync")
-		}
-		if err := validAltAz(az, alt); err != nil {
+		if err := GateTelescopeSlewToAltAz(t, "SlewToAltAzAsync", t.CanSlewAltAzAsync(), az, alt); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToAltAzAsync")
 		}
 		return true, t.SlewToAltAzAsync(az, alt)
 	case "slewtocoordinates":
@@ -399,14 +348,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSlew() {
-			return true, notImplErr("SlewToCoordinates")
-		}
-		if err := validRADec(ra, dec); err != nil {
+		if err := GateTelescopeSlewToCoordinates(t, "SlewToCoordinates", t.CanSlew(), ra, dec); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToCoordinates")
 		}
 		if err := t.SlewToCoordinates(ra, dec); err != nil {
 			return true, err
@@ -418,14 +361,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSlewAsync() {
-			return true, notImplErr("SlewToCoordinatesAsync")
-		}
-		if err := validRADec(ra, dec); err != nil {
+		if err := GateTelescopeSlewToCoordinates(t, "SlewToCoordinatesAsync", t.CanSlewAsync(), ra, dec); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToCoordinatesAsync")
 		}
 		if err := t.SlewToCoordinatesAsync(ra, dec); err != nil {
 			return true, err
@@ -433,24 +370,12 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		setTargets(t, ra, dec)
 		return true, nil
 	case "slewtotarget":
-		if !t.CanSlew() {
-			return true, notImplErr("SlewToTarget")
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToTarget")
-		}
-		if err := requireTargetsSet(t); err != nil {
+		if err := GateTelescopeSlewToTarget(t, "SlewToTarget", t.CanSlew()); err != nil {
 			return true, err
 		}
 		return true, t.SlewToTarget()
 	case "slewtotargetasync":
-		if !t.CanSlewAsync() {
-			return true, notImplErr("SlewToTargetAsync")
-		}
-		if t.AtPark() {
-			return true, parkedErr("SlewToTargetAsync")
-		}
-		if err := requireTargetsSet(t); err != nil {
+		if err := GateTelescopeSlewToTarget(t, "SlewToTargetAsync", t.CanSlewAsync()); err != nil {
 			return true, err
 		}
 		return true, t.SlewToTargetAsync()
@@ -459,14 +384,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSyncAltAz() {
-			return true, notImplErr("SyncToAltAz")
-		}
-		if err := validAltAz(az, alt); err != nil {
+		if err := GateTelescopeSlewToAltAz(t, "SyncToAltAz", t.CanSyncAltAz(), az, alt); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SyncToAltAz")
 		}
 		return true, t.SyncToAltAz(az, alt)
 	case "synctocoordinates":
@@ -474,14 +393,8 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !t.CanSync() {
-			return true, notImplErr("SyncToCoordinates")
-		}
-		if err := validRADec(ra, dec); err != nil {
+		if err := GateTelescopeSlewToCoordinates(t, "SyncToCoordinates", t.CanSync(), ra, dec); err != nil {
 			return true, err
-		}
-		if t.AtPark() {
-			return true, parkedErr("SyncToCoordinates")
 		}
 		if err := t.SyncToCoordinates(ra, dec); err != nil {
 			return true, err
@@ -489,19 +402,13 @@ func telescopePut(member string, t Telescope, p params) (bool, error) {
 		setTargets(t, ra, dec)
 		return true, nil
 	case "synctotarget":
-		if !t.CanSync() {
-			return true, notImplErr("SyncToTarget")
-		}
-		if t.AtPark() {
-			return true, parkedErr("SyncToTarget")
-		}
-		if err := requireTargetsSet(t); err != nil {
+		if err := GateTelescopeSlewToTarget(t, "SyncToTarget", t.CanSync()); err != nil {
 			return true, err
 		}
 		return true, t.SyncToTarget()
 	case "unpark":
-		if !t.CanUnpark() {
-			return true, notImplErr("Unpark")
+		if err := GateTelescopeUnpark(t); err != nil {
+			return true, err
 		}
 		return true, t.Unpark()
 	}

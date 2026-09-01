@@ -103,15 +103,15 @@ func observingConditionsGet(member string, oc ObservingConditions, p params) (an
 		name, _ := p.get("SensorName")
 		// IObservingConditionsV2: unknown sensor names are InvalidValue (and,
 		// unlike TimeSinceLastUpdate, the empty string is not a valid name).
-		if !validOCSensor(name, false) {
-			return nil, true, invalidValuef("SensorName %q is not an ObservingConditions sensor", name)
+		if err := GateObservingConditionsSensor(name, false); err != nil {
+			return nil, true, err
 		}
 		v, err := oc.SensorDescription(name)
 		return v, true, err
 	case "timesincelastupdate":
 		name, _ := p.get("SensorName")
-		if !validOCSensor(name, true) { // "" means "any sensor"
-			return nil, true, invalidValuef("SensorName %q is not an ObservingConditions sensor", name)
+		if err := GateObservingConditionsSensor(name, true); err != nil { // "" means "any sensor"
+			return nil, true, err
 		}
 		v, err := oc.TimeSinceLastUpdate(name)
 		return v, true, err
@@ -126,8 +126,8 @@ func observingConditionsPut(member string, oc ObservingConditions, p params) (bo
 		if err != nil {
 			return true, err
 		}
-		if f < 0 {
-			return true, invalidValuef("AveragePeriod %g is negative", f)
+		if err := GateObservingConditionsAveragePeriod(f); err != nil {
+			return true, err
 		}
 		return true, oc.SetAveragePeriod(f)
 	case "refresh":

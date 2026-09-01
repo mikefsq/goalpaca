@@ -139,10 +139,12 @@ var interruptMembers = map[string]bool{
 	"halt":          true,
 	// AbortSlew is THE way a client halts a slew or a continuous MoveAxis move (both set
 	// Slewing → Busy), so it must work while Busy — without this it returns
-	// InvalidOperation and the mount can never be stopped. MoveAxis is deliberately NOT
-	// here: with a nonzero rate it INITIATES motion, and the gate exists to stop a second
-	// initiator clobbering one in progress; AbortSlew is the interrupt that stops a move.
+	// InvalidOperation and the mount can never be stopped. MoveAxis is exempt for the
+	// same reason: ASCOM defines rate 0 as the stop for an axis in motion (ConformU
+	// stops exactly this way), and a rate change mid-move is legal — the device
+	// arbitrates inappropriate calls, the gate cannot.
 	"abortslew": true,
+	"moveaxis":  true,
 	// HaltCover is the interrupt for cover motion (OpenCover/CloseCover set
 	// CoverMoving → Busy); CalibratorOff ends a CalibratorOn ramp
 	// (CalibratorChanging → Busy) and is the safety path for turning the light

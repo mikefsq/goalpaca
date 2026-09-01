@@ -73,8 +73,8 @@ func focuserPut(member string, f Focuser, p params) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if b && !f.TempCompAvailable() {
-			return true, notImplErr("TempComp")
+		if err := GateFocuserTempComp(f, b); err != nil {
+			return true, err
 		}
 		return true, f.SetTempComp(b)
 	case "halt":
@@ -86,8 +86,8 @@ func focuserPut(member string, f Focuser, p params) (bool, error) {
 		}
 		// IFocuserV2 and earlier: Move is an InvalidOperation while temperature
 		// compensation is active. IFocuserV3 (Platform 6.4+) permits it.
-		if f.InterfaceVersion() < 3 && f.TempComp() {
-			return true, invalidOpErr("Move is not valid while temperature compensation is active")
+		if err := GateFocuserMove(f); err != nil {
+			return true, err
 		}
 		return true, f.Move(n)
 	}

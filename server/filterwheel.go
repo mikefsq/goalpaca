@@ -41,8 +41,8 @@ func filterWheelPut(member string, fw FilterWheel, p params) (bool, error) {
 			return true, err
 		}
 		// IFilterWheelV2: the target slot must exist (0..N-1).
-		if slots := len(fw.Names()); n < 0 || n >= slots {
-			return true, invalidValuef("Position %d is outside the valid range 0 to %d", n, slots-1)
+		if err := GateFilterWheelPosition(fw, n); err != nil {
+			return true, err
 		}
 		return true, fw.SetPosition(n)
 	}
