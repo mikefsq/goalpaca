@@ -205,7 +205,6 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 		Width:                   int(le.Uint32(data[32:])),
 		Height:                  int(le.Uint32(data[36:])),
 		Planes:                  int(le.Uint32(data[40:])),
-		Pixels:                  append([]byte(nil), data[dataStart:]...),
 	}
 	// Reverse the encode-time transpose (ASCOM column-major wire → sensor row-major),
 	// so callers of the Go client get natural row-major pixels. See EncodeImageBytes.
@@ -213,9 +212,82 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 	if transmit == 0 {
 		transmit = frame.ElementType
 	}
+	pixels := data[dataStart:]
+	// The DETACH COPY is only made when nothing else is going to allocate.
+	//
+	// Pixels must not alias data, because the caller owns that buffer and is free to reuse it. But
+	// transposeElems ALREADY returns a fresh allocation, so on the ordinary path — a rank-2 frame
+	// from any camera — copying first and transposing second allocated and walked the whole frame
+	// twice to produce one result. At 122 MB a frame that is a wasted allocation and a wasted pass.
+	//
+	// So the transpose consumes the caller's buffer directly (it only reads it) and the copy is
+	// kept for the paths where no transpose runs: rank 3, an unknown element width, or a payload
+	// whose length disagrees with its dimensions.
 	if es := ElementSize(transmit); frame.Rank == 2 && es > 0 &&
-		frame.Width > 0 && frame.Height > 0 && len(frame.Pixels) == frame.Width*frame.Height*es {
-		frame.Pixels = transposeElems(frame.Pixels, frame.Width, frame.Height, es)
+		frame.Width > 0 && frame.Height > 0 && len(pixels) == frame.Width*frame.Height*es {
+		frame.Pixels = transposeElems(pixels, frame.Width, frame.Height, es)
+	} else {
+		frame.Pixels = append([]byte(nil), pixels...)
 	}
 	return frame, nil
+}
+
+// ImageBytesHeader is the fixed 44-byte metadata prefix, parsed on its own.
+//
+// It exists so a client can size and shape its destination BEFORE the pixels arrive, which is what
+// makes a streaming decode possible: everything needed to allocate the final buffer — the element
+// type actually on the wire, the rank, and the three dimensions — is in the first 44 bytes.
+// DecodeImageBytes cannot serve that purpose because it takes the whole payload by value.
+type ImageBytesHeader struct {
+	ErrorNumber             int
+	DataStart               int
+	ElementType             ImageElementType
+	TransmissionElementType ImageElementType
+	Rank                    int
+	Width                   int
+	Height                  int
+	Planes                  int
+}
+
+// Transmit is the element type the PIXELS are in, which is not always the logical one: a server may
+// ship a 16-bit sensor's frame as UInt16 while presenting it as Int32. Reading the buffer with the
+// logical type would misalign every sample after the first.
+func (h ImageBytesHeader) Transmit() ImageElementType {
+	if h.TransmissionElementType != 0 {
+		return h.TransmissionElementType
+	}
+	return h.ElementType
+}
+
+// PixelBytes is how many pixel bytes the header says will follow, or 0 when the dimensions do not
+// describe a frame this codec can size (an error payload, or an element type of unknown width).
+func (h ImageBytesHeader) PixelBytes() int {
+	es := ElementSize(h.Transmit())
+	if es <= 0 || h.Width <= 0 || h.Height <= 0 {
+		return 0
+	}
+	planes := h.Planes
+	if h.Rank != 3 || planes <= 0 {
+		planes = 1
+	}
+	return h.Width * h.Height * planes * es
+}
+
+// ParseImageBytesHeader reads the metadata prefix. data must be at least ImageBytesHeaderLen long;
+// the pixels need not be present, which is the point.
+func ParseImageBytesHeader(data []byte) (ImageBytesHeader, error) {
+	if len(data) < ImageBytesHeaderLen {
+		return ImageBytesHeader{}, NewError(ErrNumUnspecified, "imagebytes response shorter than metadata header")
+	}
+	le := binary.LittleEndian
+	return ImageBytesHeader{
+		ErrorNumber:             int(int32(le.Uint32(data[4:]))),
+		DataStart:               int(le.Uint32(data[16:])),
+		ElementType:             ImageElementType(le.Uint32(data[20:])),
+		TransmissionElementType: ImageElementType(le.Uint32(data[24:])),
+		Rank:                    int(le.Uint32(data[28:])),
+		Width:                   int(le.Uint32(data[32:])),
+		Height:                  int(le.Uint32(data[36:])),
+		Planes:                  int(le.Uint32(data[40:])),
+	}, nil
 }

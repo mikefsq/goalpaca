@@ -94,6 +94,19 @@ type Device struct {
 	timeout    time.Duration
 	http       *http.Client // JSON-envelope calls: overall per-request timeout
 	imageHTTP  *http.Client // image downloads: connection-level limits only
+
+	// noStream latches a server that ignores the ImageBytes Accept negotiation, so ImageArrayInto
+	// stops attempting a streamed download against it.
+	//
+	// Without it the penalty recurs on EVERY FRAME: a request that is answered with JSON, up to a
+	// megabyte of that JSON read to look for an error envelope, and then the whole image fetched a
+	// second time through ImageArrayCtx. One wasted request per device is a discovery; one per
+	// frame is a regression, and it would land on exactly the older servers least able to afford it.
+	//
+	// A pointer because Device is returned by value from newDevice and atomic.Bool must not be
+	// copied. Never cleared: a server does not learn to speak ImageBytes mid-session, and re-probing
+	// would reintroduce the per-frame cost this exists to remove.
+	noStream *atomic.Bool
 }
 
 func newDevice(address string, dt alpaca.DeviceType, number int, opts ...Option) Device {
@@ -102,6 +115,7 @@ func newDevice(address string, dt alpaca.DeviceType, number int, opts ...Option)
 		deviceType:   dt,
 		deviceNumber: number,
 		clientID:     rand.Uint32()%65535 + 1,
+		noStream:     new(atomic.Bool),
 	}
 	for _, o := range opts {
 		o(&d)
