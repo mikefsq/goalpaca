@@ -60,8 +60,10 @@ func TestURLAuthorityWindowsZoneParsesAndRoundTrips(t *testing.T) {
 
 func TestNormalizeBaseURLZone(t *testing.T) {
 	for _, addr := range []string{
-		"[fe80::1%eth0]:11112",                                  // unix-style zone
-		`[fe80::ecac:ca83:5438:3c7b%Ethernet Instance 0]:11110`, // windows-style zone
+		// unix-style zone
+		"[fe80::1%eth0]:11112",
+		// windows-style zone
+		`[fe80::ecac:ca83:5438:3c7b%Ethernet Instance 0]:11110`,
 	} {
 		base := normalizeBaseURL(addr)
 		if _, err := url.Parse(base + "/api/v1/camera/0/connected"); err != nil {
