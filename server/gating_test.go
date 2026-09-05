@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestNotConnectedGating verifies operational members return NotConnected
-// (0x407) while disconnected, that the introspection/connection members stay
-// available, and that operational members work once connected.
 func TestNotConnectedGating(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	if err := s.Register(CameraType, 0, newFakeCamera()); err != nil { // NOT connected
@@ -47,9 +44,6 @@ func TestNotConnectedGating(t *testing.T) {
 	}
 }
 
-// TestBusyGating verifies that while a Busyable device reports Busy(), mutating
-// PUTs are rejected with InvalidOperation, while reads and interrupt members
-// (abortexposure) still work.
 func TestBusyGating(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	cam := newFakeCamera()
@@ -127,9 +121,6 @@ func newFakeTelescope() *fakeTelescope {
 	return tel
 }
 
-// TestBusyGatingTelescopeMotion verifies AbortSlew halts a busy (slewing) mount —
-// it must bypass the Busy gate, since it is THE interrupt that ends the motion —
-// while MoveAxis (a motion INITIATOR) stays gated with InvalidOperation.
 func TestBusyGatingTelescopeMotion(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	tel := newFakeTelescope()
@@ -147,18 +138,7 @@ func TestBusyGatingTelescopeMotion(t *testing.T) {
 		t.Error("busy abortslew did not reach the device")
 	}
 
-	// MoveAxis must also reach a busy device, and this assertion was BACKWARDS until the
-	// exemption that makes it true was added.
-	//
-	// It used to require InvalidOperation, on the reading that MoveAxis is an initiator like any
-	// other. interruptMembers now exempts it, with the reason recorded there: ASCOM defines rate 0
-	// as the stop for an axis already in motion (ConformU stops exactly that way), and a rate
-	// CHANGE mid-move is legal too. A MoveAxis that cannot reach a moving mount is a mount that
-	// cannot be slowed or stopped through the axis it is moving on.
-	//
-	// The test kept failing rather than being noticed because it also needed CanMoveAxis on the
-	// fake — BaseTelescope answers false — so the request was refused with NotImplemented and the
-	// busy gate never came into it either way.
+	// MoveAxis must reach a busy device so a zero-rate command can stop motion.
 	if mr := put(t, s, "/api/v1/telescope/0/moveaxis", url.Values{"Axis": {"0"}, "Rate": {"1.5"}}); mr.ErrorNumber != 0 {
 		t.Errorf("busy moveaxis ErrorNumber = %#x, want success", mr.ErrorNumber)
 	}
@@ -203,9 +183,6 @@ func newFakeCoverCal() *fakeCoverCal {
 	return cc
 }
 
-// TestBusyGatingCoverCalibrator verifies HaltCover and CalibratorOff bypass the
-// Busy gate — they are the interrupts that end cover motion / a calibrator
-// ramp — while OpenCover (an initiator) stays gated with InvalidOperation.
 func TestBusyGatingCoverCalibrator(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	cc := newFakeCoverCal()
@@ -261,9 +238,6 @@ func newFakeSwitch() *fakeAsyncSwitch {
 	return sw
 }
 
-// TestBusyGatingSwitchAsync verifies CancelAsync bypasses the Busy gate — it is
-// ISwitchV3's interrupt for an in-flight async state change — while SetAsync
-// (an initiator) stays gated with InvalidOperation.
 func TestBusyGatingSwitchAsync(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	sw := newFakeSwitch()

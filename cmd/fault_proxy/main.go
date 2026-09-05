@@ -1,74 +1,5 @@
-// Command fault_proxy is a transparent Alpaca HTTP reverse proxy that injects
-// faults into individual device members at runtime, so an Alpaca client's error
-// and recovery paths can be exercised on demand against an otherwise-correct sim.
-//
-// Point the client's device address at the proxy (host:port of -listen) and the
-// proxy forwards every request to -upstream unchanged -- including the binary
-// ImageBytes camera transport -- until a fault is armed via the control channel:
-//
-//	# invalid guide rate (client should reject it and alert):
-//	curl 'localhost:11510/_ctl/set?fault=value&member=guideraterightascension&value=0.05'
-//	# force a slew during guiding:
-//	curl 'localhost:11510/_ctl/set?fault=value&member=slewing&value=true'
-//	# fail a pulse guide:
-//	curl 'localhost:11510/_ctl/set?fault=fail&member=pulseguide'
-//	# report a member as not implemented (tests capability probes):
-//	curl 'localhost:11510/_ctl/set?fault=notimpl&member=ispulseguiding'
-//	# device error with a blank ErrorMessage (tests error-number synthesis):
-//	curl 'localhost:11510/_ctl/set?fault=emptyerr&member=startexposure'
-//	# HTTP 500 on a member:
-//	curl 'localhost:11510/_ctl/set?fault=http&member=imageready&value=500'
-//	# never respond to a member (tests client timeout / cancel):
-//	curl 'localhost:11510/_ctl/set?fault=hang&member=imagearray'
-//	# scope a member fault to one verb (fail the write, keep the status read):
-//	curl 'localhost:11510/_ctl/set?fault=fail&member=cooleron&method=PUT'
-//	# global request latency (ms) and hard connection drop:
-//	curl 'localhost:11510/_ctl/set?fault=latency&value=35000'
-//	curl 'localhost:11510/_ctl/set?fault=drop'
-//	# binary faults on the camera frame (and swap the requested binning):
-//	curl 'localhost:11511/_ctl/set?fault=swapbin'                             # flip BinX/BinY 1<->2 on the PUT
-//	curl 'localhost:11511/_ctl/set?fault=truncate&member=imagearray&value=90' # send 90% of the frame
-//	curl 'localhost:11511/_ctl/set?fault=inject&member=imagearray&value=10'   # splice 10% junk into the middle
-//	curl 'localhost:11511/_ctl/set?fault=corrupthead&member=imagearray&value=44' # corrupt the ImageBytes header
-//	curl 'localhost:11511/_ctl/set?fault=corrupttail&member=imagearray&value=64' # corrupt the frame tail
-//	# set an exact ImageBytes header field (deterministic decode-branch coverage):
-//	curl 'localhost:11511/_ctl/set?fault=imgfield&member=imagearray&value=datastart:-16'
-//	curl 'localhost:11511/_ctl/set?fault=pixels&member=imagearray&value=sat'  # saturate the frame
-//	curl 'localhost:11511/_ctl/set?fault=swapdims'                           # transpose the frame (axes flipped)
-//	curl 'localhost:11511/_ctl/set?fault=forcejson'                         # strip ImageBytes Accept -> JSON ImageArray
-//	# transport / structure faults:
-//	curl 'localhost:11511/_ctl/set?fault=partial-drop&member=imagearray&value=40' # deliver 40% then RST
-//	curl 'localhost:11510/_ctl/set?fault=dropack&member=pulseguide'  # sim runs it, client loses the ack
-//	curl 'localhost:11511/_ctl/set?fault=contenttype&member=imagearray&value=text/plain'
-//	curl 'localhost:11510/_ctl/set?fault=malform&member=slewing'    # unparseable JSON
-//	curl 'localhost:11510/_ctl/set?fault=novalue&member=slewing'    # drop the Value key
-//	curl 'localhost:11511/_ctl/set?fault=throttle&member=imagearray&value=20000' # 20 KB/s slow drip
-//	# realistic degraded network (random; use -seed to replay):
-//	curl 'localhost:11510/_ctl/set?fault=jitter&value=50-800'      # per-request delay in [50,800] ms
-//	curl 'localhost:11510/_ctl/set?fault=flaky&member=slewing&value=25' # 25% of reads error
-//	curl 'localhost:11510/_ctl/set?fault=lossy&value=10'           # 10% of requests RST
-//	curl 'localhost:11510/_ctl/set?fault=chaos'                    # jitter + lossy + partial frame drops
-//	# reproducible transient patterns:
-//	curl 'localhost:11510/_ctl/set?fault=failfirst&member=connected&value=2' # fail first 2, then succeed
-//	curl 'localhost:11510/_ctl/set?fault=everynth&member=slewing&value=5'    # fail every 5th read
-//	# inspect / clear:
-//	curl 'localhost:11510/_ctl/list'
-//	curl 'localhost:11510/_ctl/clear'                        # all
-//	curl 'localhost:11510/_ctl/clear?member=slewing'         # one member
-//	curl 'localhost:11510/_ctl/set?fault=swapbin&value=off'  # disarm one global toggle
-//
-// Run one proxy per upstream device (a camera and a mount are separate servers):
-//
-//	fault_proxy -listen :11510 -upstream 127.0.0.1:11110    # mount
-//	fault_proxy -listen :11511 -upstream 10.0.1.20:11114    # camera
-//	fault_proxy -listen :11511 -discover -discover-match camera  # find the upstream by discovery
-//
-// With -advertise the proxy also answers Alpaca UDP discovery (:32227) with its
-// own port, co-binding the port (SO_REUSEPORT on Linux/macOS, SO_REUSEADDR on Windows)
-// so it appears in a Discover list next to the real device -- pick the proxy's port to
-// route a session through the faults. With -discover it finds its own upstream by
-// discovery instead of -upstream (optionally -discover-match <type> to choose among
-// several servers).
+// Command fault_proxy injects HTTP, device, image, and network faults into
+// proxied Alpaca requests. See README.md for flags and the control API.
 package main
 
 import (
@@ -100,18 +31,9 @@ import (
 // alpacaDiscoveryPort is the fixed ASCOM Alpaca UDP discovery port.
 const alpacaDiscoveryPort = 32227
 
-// runAdvertise answers Alpaca UDP discovery with the proxy's own HTTP port, so
-// the proxy shows up in a discovery tool as a selectable server. It co-binds the
-// discovery port (server.ReuseControl) rather than owning it exclusively, so the
-// upstream device's own discovery responder keeps working and both appear in the
-// list -- the operator picks the proxy's port to route a session through the fault
-// injector, or the real port to bypass it.
-//
-// Caveat: port sharing delivers a broadcast probe to every co-bound responder (so
-// both answer), but a directed unicast probe reaches only one of them.
-//
-// Advertising is best-effort: a bind failure is logged, never fatal, since the proxy
-// itself still works and the operator can reach it by typed address.
+// runAdvertise answers broadcast discovery with the proxy's HTTP port.
+// It shares the discovery socket with other responders; directed unicast
+// probes may reach only one responder.
 func runAdvertise(ctx context.Context, alpacaPort int) {
 	lc := net.ListenConfig{Control: server.ReuseControl}
 	pc, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", alpacaDiscoveryPort))

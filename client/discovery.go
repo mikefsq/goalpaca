@@ -26,20 +26,10 @@ type DiscoveredServer struct {
 	Address    string // host:port for the HTTP API (pass to New<Type>)
 }
 
-// Discover finds Alpaca servers via UDP discovery on BOTH IPv4 (broadcast) and
-// IPv6 (per-interface multicast), running the two concurrently and merging the
-// results deduplicated by address. If one stack is unavailable (e.g. no IPv6),
-// its results are simply omitted; an error is returned only if both legs fail.
-//
-// IPv6 discovery only finds servers that have joined the multicast group, i.e.
-// servers configured with DiscoveryConfig.EnableIPv6.
-//
-// Results are deduplicated by dialable address, so one physical server
-// reachable over both IPv4 and IPv6 appears twice (two distinct addresses).
-// Merge by the management API's UniqueID when a UI needs one entry per server.
-//
-// Discover blocks for the full timeout (the listen window). Use
-// DiscoverContext to make it cancellable.
+// Discover probes IPv4 broadcast and IPv6 multicast concurrently for timeout.
+// It returns an error only if both fail. IPv6 servers must enable multicast.
+// Results are deduplicated by address; a dual-stack server can appear twice.
+// Use DiscoverContext for cancellation.
 func Discover(timeout time.Duration) ([]DiscoveredServer, error) {
 	return DiscoverContext(context.Background(), timeout)
 }

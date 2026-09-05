@@ -92,9 +92,6 @@ func (d *asyncConnectDevice) Connect(ctx context.Context) error {
 	return nil
 }
 
-// TestAsyncConnectFailureSurfaced verifies the Platform 7 contract: PUT
-// connect returns success (the initiator), and the recorded failure of the
-// async operation is reported in-band when the client polls `connecting`.
 func TestAsyncConnectFailureSurfaced(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	dev := &asyncConnectDevice{failWith: NewError(0x500, "USB enumeration failed")}
@@ -161,9 +158,6 @@ func (c *stateOverrideCamera) DeviceState() []StateValue {
 	}
 }
 
-// TestDeviceStateMerge verifies driver DeviceState overrides are merged into
-// the library-built set: new names append, same names override, and the
-// mandatory TimeStamp is still supplied.
 func TestDeviceStateMerge(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	sw := &statefulSwitch{}
@@ -220,9 +214,6 @@ func (s *dsSwitch) GetSwitchValue(id int) (float64, error)   { return s.val[id],
 func (s *dsSwitch) GetSwitch(id int) (bool, error)           { return s.val[id] != 0, nil }
 func (s *dsSwitch) StateChangeComplete(id int) (bool, error) { return true, nil }
 
-// ISwitchV3 has no scalar operational property: DeviceState must publish the whole bank,
-// indexed — GetSwitch{n}, GetSwitchValue{n}, StateChangeComplete{n} — so a client gets it
-// in one round trip instead of 3·MaxSwitch separate GETs.
 func TestDeviceStateSwitch(t *testing.T) {
 	sw := &dsSwitch{val: [2]float64{0, 60}}
 	got := map[string]any{}

@@ -62,10 +62,6 @@ func registerModeServer(t *testing.T, hosts []string) (*Server, *net.UDPConn, He
 	return s, orch, hb, &logBuf
 }
 
-// TestRegisterModeBindsNoDiscoverySocket: a device launched in Register mode
-// registers over an ephemeral socket and never binds UDP 32227, which stays
-// free for the orchestrator on the same host. The test holds 32227 exclusively
-// where it can, so any bind attempt by the server would fail and be logged.
 func TestRegisterModeBindsNoDiscoverySocket(t *testing.T) {
 	hold, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: alpacaDiscoveryPort})
 	if err != nil {
@@ -91,8 +87,6 @@ func TestRegisterModeBindsNoDiscoverySocket(t *testing.T) {
 	}
 }
 
-// TestHeartbeatCarriesSingleHost: with one specific Host the registration
-// names it as the reachable address.
 func TestHeartbeatCarriesSingleHost(t *testing.T) {
 	_, _, hb, _ := registerModeServer(t, []string{"127.0.0.1"})
 	if hb.Address != "127.0.0.1" {
@@ -111,9 +105,6 @@ func postReply(t *testing.T, s *Server, body string) *http.Response {
 	return resp
 }
 
-// TestDiscoveryReplyEndpoint: a POST from the discovery server's address makes
-// the device send its standard reply to the given target, and the checks on
-// method, body, and target hold.
 func TestDiscoveryReplyEndpoint(t *testing.T) {
 	s, _, _, _ := registerModeServer(t, nil)
 
@@ -158,9 +149,6 @@ func TestDiscoveryReplyEndpoint(t *testing.T) {
 	}
 }
 
-// TestDiscoveryReplyRefusesOtherCallers: a device registered with a remote
-// discovery server refuses a relay request from anyone else, here the test's
-// own loopback client against a TEST-NET peer.
 func TestDiscoveryReplyRefusesOtherCallers(t *testing.T) {
 	s := New(Config{
 		AlpacaPort: 0,
@@ -185,8 +173,6 @@ func TestDiscoveryReplyRefusesOtherCallers(t *testing.T) {
 	}
 }
 
-// TestDiscoveryReplyAbsentOutsideRegisterMode: Direct and Off servers have no
-// relay endpoint at all.
 func TestDiscoveryReplyAbsentOutsideRegisterMode(t *testing.T) {
 	for _, mode := range []DiscoveryMode{DiscoveryDirect, DiscoveryOff} {
 		s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: mode}, ServerName: "relay-test"})
@@ -205,7 +191,6 @@ func TestDiscoveryReplyAbsentOutsideRegisterMode(t *testing.T) {
 	}
 }
 
-// TestDiscoveryReplyRateLimit: a burst beyond the bucket draws 429s.
 func TestDiscoveryReplyRateLimit(t *testing.T) {
 	var g rateGate
 	now := time.Unix(1_700_000_000, 0)

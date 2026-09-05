@@ -15,16 +15,8 @@ const telescopeRATolerance = 0.1
 // telescopeDecTolerance is the slew arrival tolerance for declination (degrees).
 const telescopeDecTolerance = 0.5
 
-// CheckTelescope runs the ConformU Telescope conformance checks against c. Ported
-// from ConformU's TelescopeTester, restricted to the behaviour the goalpaca
-// simulator implements: NotConnected gating, capability flags, enum/property
-// reads, tracking, target round-trips, asynchronous slew/sync arrival,
-// park/unpark/home, site round-trips, UTCDate, axis capability/rates, and
-// DestinationSideOfPier. Out-of-range writes are expected to fault InvalidValue.
-//
-// Skipped (the sim does not model these, so ConformU's corresponding checks are
-// intentionally omitted): alt/az slew arrival accuracy, precise side-of-pier
-// flip semantics, refraction effects, and guide-rate precision.
+// CheckTelescope checks the goalpaca simulator's properties, motion, and errors.
+// It omits alt/az arrival accuracy, precise pier flips, refraction, and guide-rate precision.
 func CheckTelescope(t *testing.T, c *client.Telescope) {
 	t.Helper()
 

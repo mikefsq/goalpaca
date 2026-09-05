@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// TestOptionsCompose verifies WithHTTPClient and WithTimeout compose in either
-// order: the custom client's transport is kept and the timeout applied.
 func TestOptionsCompose(t *testing.T) {
 	tr := &http.Transport{}
 	custom := &http.Client{Transport: tr, Timeout: time.Minute}
@@ -29,8 +27,6 @@ func TestOptionsCompose(t *testing.T) {
 	}
 }
 
-// TestDefaultClients verifies the defaults: envelope calls bounded at 30s,
-// image downloads with no overall cap but a response-header bound.
 func TestDefaultClients(t *testing.T) {
 	d := newDevice("127.0.0.1:11111", "camera", 0)
 	if d.http.Timeout != defaultTimeout {

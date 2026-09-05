@@ -1,23 +1,17 @@
 # fault_proxy
 
-A transparent Alpaca HTTP reverse proxy that injects faults into individual
-device members at runtime, so an Alpaca client's error, alert, and recovery
-paths can be exercised deterministically against an otherwise-correct sim.
-
-The proxy forwards every request to the upstream device unchanged — including
-the binary ImageBytes camera transport — until a fault is armed over the
-control channel. Faults toggle live while the client runs, so you watch the
-alert or error fire in real time.
+An Alpaca HTTP reverse proxy for testing client error handling and recovery.
+Requests pass through unchanged until you enable a fault through the control API.
+Faults can be changed while the client is running.
 
 ## Run
 
-One proxy instance per upstream device (a camera and a mount are separate
-Alpaca servers):
+Run a proxy for each upstream server you want to test:
 
 ```bash
 go run ./cmd/fault_proxy -listen :11510 -upstream 127.0.0.1:11110   # mount
 go run ./cmd/fault_proxy -listen :11511 -upstream 10.0.1.20:11114   # camera
-#   -seed N     fixes the PRNG so jitter/flaky/lossy/chaos runs replay exactly
+#   -seed N     sets the random seed for jitter/flaky/lossy/chaos
 #   -advertise  answer UDP discovery so the proxy shows up in a Discover list
 #   -discover   find the upstream via UDP discovery instead of -upstream
 #     -discover-match camera   require the chosen server to host that device type
@@ -111,7 +105,7 @@ The raw-body faults (`truncate` `inject` `corrupt*` `imgfield` `pixels` `malform
 rewrite the bytes, so they apply to the binary ImageBytes camera frame
 (`member=imagearray`) as well as JSON. `swapbin` is a request-side mutation.
 The random faults (`jitter` `flaky` `lossy` `chaos`) draw from a PRNG seeded by
-`-seed` (0 = time-based) so a run can be replayed exactly.
+`-seed` (0 = time-based) for repeatable random sequences; request ordering still affects results.
 
 `member` is the Alpaca member — the last path segment, e.g. `slewing`,
 `pulseguide`, `guideraterightascension`, `imageready`, `cooleron`, `connected`.
@@ -194,8 +188,8 @@ curl 'localhost:11510/_ctl/set?fault=swapbin&value=off'  # disarm one global tog
 | Corrupt ImageBytes header | `fault=corrupthead&member=imagearray&value=44` | header-validation error (bad version / rank / dims / data offset) |
 | Extra/garbage bytes mid-frame | `fault=inject&member=imagearray&value=10` | no crash; corrupted guide frame |
 | Corrupt frame tail | `fault=corrupttail&member=imagearray&value=64` | no crash; corrupted image tail |
-| Negative data offset (P0-3) | `fault=imgfield&member=imagearray&value=datastart:-16` | "invalid ImageBytes data offset"; no out-of-range read |
-| Implausible dimensions (P0-3) | `fault=imgfield&member=imagearray&value=dim1:2000000000` | dimension-validation error; no size-wrap over-read |
+| Negative data offset | `fault=imgfield&member=imagearray&value=datastart:-16` | "invalid ImageBytes data offset"; no out-of-range read |
+| Implausible dimensions | `fault=imgfield&member=imagearray&value=dim1:2000000000` | dimension-validation error; no size-wrap over-read |
 | Bad rank / version | `fault=imgfield&member=imagearray&value=rank:5` / `value=version:9` | unsupported-rank / unsupported-version error |
 | Not ImageBytes content type | `fault=contenttype&member=imagearray&value=application/json` | "server did not return ImageBytes" |
 | Saturated / zero frame | `fault=pixels&member=imagearray&value=sat` | frame decodes; star detection copes with a flat field |
@@ -216,46 +210,14 @@ curl 'localhost:11510/_ctl/set?fault=swapbin&value=off'  # disarm one global tog
 | Transient outage recovery | `fault=failfirst&member=connected&value=2` | first 2 connects fail, 3rd succeeds — exercises the reconnect window |
 | Reproducible flapping | `fault=everynth&member=slewing&value=5` (`-seed N`) | every 5th read fails, identically across replays |
 
-## Coverage notes
-
-Reachable with the proxy: every JSON member fault (all connect / guide / slew /
-cooler / capability alert and log paths), plus the raw-body faults above, which
-cover the ImageBytes frame-size guard and the whole `getImageBytes` header
-validation suite. `imgfield` hits each header branch **deterministically** by
-name (unsupported version, bad rank, implausible dimensions, invalid data
-offset), where `corrupthead` only perturbs bytes at random. `partial-drop`,
-`throttle`, `jitter`, `lossy`, and `chaos` add the transport-level and
-degraded-network paths (mid-download reset, slow-link stall, intermittent loss)
-that byte-level corruption can't reach.
-
-**Still not reachable**: host-side failures (memory-allocation failure on
-`img.Init`) are not network-injectable at all; and the mount's no-PulseGuide
-alert is currently guarded by a capability read that only happens at connect, so
-it fires only once the driver's `CanPulseGuide` self-heal (re-probe after a
-failed pulse) is implemented.
-
 ## Tests
 
-`go test ./cmd/fault_proxy` exercises every fault end-to-end through the real
-reverse proxy against an `httptest` upstream, armed via the control channel
-exactly as curl would: the JSON error injections, `value`/`novalue`/`malform`
-structure faults, `http` status, `hang` (client-timeout path), `latency` and
-`jitter` delays, `drop`/`lossy` connection resets, `swapbin` PUT rewriting,
-the raw-body mutations (with corrected Content-Length), `imgfield`/`pixels`
-against a synthetic ImageBytes frame, `swapdims`/`forcejson`, `partial-drop`
-(including the full-length case) / `dropack` broken transfers (asserting the
-upstream still executed the `dropack` request), `throttle` pacing, the
-`failfirst`/`everynth` patterns, `method=` verb scoping (GET/PUT and hang),
-case-insensitive member matching, the management-endpoint exclusion, `chaos`
-deferring to an explicit fault and honouring an explicit `lossy=0`,
-content-family mismatch no-op, global `value=off` disarm, control-API argument
-validation, and `clear` scoping (one member vs. everything). The store is
-fixed-seeded in tests, so the random faults assert deterministically.
+```sh
+go test ./cmd/fault_proxy
+```
 
-Discovery is covered too: the `-advertise` responder answers a probe with the
-proxy's port (and ignores non-probes), and the `-discover` selection logic
-(self-exclusion on loopback, first-server default, `-discover-match` by device
-type) is unit-tested against synthetic discovery results.
+The tests exercise the control API, fault handling, and discovery with local
+HTTP servers and fixed random seeds.
 
 ## Scripted PHD2 testing
 
@@ -315,67 +277,3 @@ TCP 4400, enabled in PHD2 via **Tools → Enable Server**:
   their alert lands — PHD2's reconnect is single-shot, so a fault held across
   the reconnect window drops the camera (the runner recovers by reconnecting,
   but the timing is deliberate).
-
-## Roadmap
-
-Implemented and proposed faults. `[x]` = built, covered by
-`go test ./cmd/fault_proxy`, and smoke-tested live; `[ ]` = planned.
-
-### Implemented
-
-- [x] `fail` — device error (driver-range `ErrorNumber`) on a member
-- [x] `notimpl` — ASCOM "not implemented" (`0x400`) — tests capability probes
-- [x] `emptyerr` — device error with a blank `ErrorMessage` — tests error-number synthesis
-- [x] `value` — override the returned `Value` (raw JSON; bare word → JSON string)
-- [x] `http` — return an HTTP status instead of a normal reply
-- [x] `hang` — never respond (until the client cancels) — read timeout / cancel
-- [x] `latency` — fixed global pre-forward delay
-- [x] `drop` — close before forwarding — dead/unreachable server
-- [x] `swapbin` — flip `BinX`/`BinY` `1`↔`2` on the PUT — frame-size-mismatch guard
-- [x] `swapdims` — transpose the returned ImageBytes frame (dim1↔dim2 + pixels) — axis-swap detect/correct path
-- [x] `forcejson` — strip the ImageBytes `Accept` so the upstream returns JSON `ImageArray` — JSON fallback decode path
-- [x] `truncate` — clean short body (corrected Content-Length) — payload-truncated parse error
-- [x] `inject` — splice junk bytes mid-body — corrupt frame, no crash
-- [x] `corrupthead` / `corrupttail` — flip first/last N bytes — header/tail corruption
-- [x] `method=GET|PUT` — scope any member fault to one HTTP verb (fail the write, keep the read)
-
-### Binary / frame precision
-
-- [x] `imgfield` — set a specific ImageBytes header field (version/errNum/dataStart/
-      txElemType/rank/dim1/dim2) to an exact value → **deterministically** hit each
-      `getImageBytes` validation branch, esp. the P0-3 memory-safety inputs
-      (`dataStart=-16` → `substr` throw; `dim1/dim2` huge → 32-bit size wrap)
-- [x] `partial-drop` — advertise the real Content-Length, deliver N%, then **RST** →
-      transport error (mid-download WiFi drop), distinct from `truncate`'s parse error
-- [x] `contenttype` — override the response Content-Type → the ImageBytes
-      "server did not return ImageBytes" guard (and JSON-parse of a binary body)
-- [x] `pixels` — semantic frame corruption (all-saturated / all-zero) → star-detection
-      / SNR robustness rather than a crash
-
-### JSON structure
-
-- [x] `malform` — return unparseable JSON → "malformed JSON response"
-- [x] `novalue` — drop the `Value` key → "no Value in response"
-
-### Realistic network (the reviewer's "non-ideal network" gap)
-
-- [x] `jitter` — variable delay, random per request in `[min,max]` (WiFi latency)
-- [x] `flaky` — random device error at `rate` (application-level intermittent failure)
-- [x] `lossy` — random connection RST at `rate` (transport-level unreliable link)
-- [x] `throttle` — slow-drip the body at `bytes/sec` — mid-transfer stall (vs. `hang`)
-- [x] `dropack` — forward the request (so the sim executes it) then drop the response —
-      "lost ack" semantics (e.g. a pulse the mount ran but PHD2 thinks failed)
-- [x] `chaos` / `badwifi` — combined toggle: jitter + lossy + occasional partial-drop,
-      for soak-testing a full guide session under a degraded link
-
-### Determinism helpers
-
-- [x] `failfirst N` — fail the first N requests to a member, then succeed
-      (tests recovery after a transient outage; reconnect-window behavior)
-- [x] `everynth N` — fail every Nth request (reproducible intermittent pattern)
-- [x] `-seed` flag — replayable pseudo-random runs for `jitter`/`flaky`/`lossy`
-
-Notes:
-- `hang pulseguide` already covers the plain "no ack on a guide command" case.
-- Random faults (`jitter`/`flaky`/`lossy`/`chaos`) are for soak testing; use the
-  determinism helpers (`failfirst`/`everynth`/`-seed`) to reproduce a specific bug.

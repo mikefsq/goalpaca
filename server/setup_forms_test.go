@@ -30,8 +30,6 @@ func (d *actionDevice) Action(name, params string) (string, error) {
 	return "ok " + params, nil
 }
 
-// The Actions console lists SupportedActions and dispatches one through the
-// device's Action method, showing the reply or the error.
 func TestSetupActionsConsole(t *testing.T) {
 	dev := &actionDevice{}
 	dev.ID, dev.DevName = "a1", "Action Cam"
@@ -67,7 +65,6 @@ func TestSetupActionsConsole(t *testing.T) {
 	}
 }
 
-// A device with no actions gets a notice, not an empty select.
 func TestSetupActionsConsoleEmpty(t *testing.T) {
 	s := setupTestServer(t, newTestFocuser()) // BaseDevice: no actions
 	w := do(t, s, http.MethodGet, "/setup/v1/customfocuser/0/setup", "")
@@ -76,8 +73,6 @@ func TestSetupActionsConsoleEmpty(t *testing.T) {
 	}
 }
 
-// The action form and the settings form share one URL; a settings POST must
-// not be mistaken for an action and vice versa.
 func TestSetupActionAndSettingsFormsDistinct(t *testing.T) {
 	dev := newTestFocuser()
 	s := setupTestServer(t, dev)
@@ -87,8 +82,6 @@ func TestSetupActionAndSettingsFormsDistinct(t *testing.T) {
 	}
 }
 
-// Config.SetupTemplates replaces a page template; the override receives the
-// same view data as the default.
 func TestSetupTemplateOverride(t *testing.T) {
 	custom := template.Must(template.New("server").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).
 		Parse(`<html><body class="branded"><h1>{{.ServerName}}</h1>{{css}}{{range .Devices}}<a href="{{.URL}}">{{.Name}}</a>{{end}}</body></html>`))
@@ -117,7 +110,6 @@ func TestSetupTemplateOverride(t *testing.T) {
 	}
 }
 
-// DefaultSetupTemplates returns usable copies a host can extend.
 func TestDefaultSetupTemplatesRender(t *testing.T) {
 	d := DefaultSetupTemplates()
 	if d.Server == nil || d.Device == nil || d.Error == nil || d.CSS == "" {
@@ -129,8 +121,6 @@ func TestDefaultSetupTemplatesRender(t *testing.T) {
 	}
 }
 
-// Config.Setup adds a server-level form to /setup, applied by POST; without it
-// /setup stays read-only and refuses POST.
 func TestSetupServerLevelForm(t *testing.T) {
 	// Without Config.Setup: no form, POST refused (existing behaviour).
 	s := setupTestServer(t, newTestFocuser())
@@ -171,8 +161,6 @@ func TestSetupServerLevelForm(t *testing.T) {
 	}
 }
 
-// A setup POST from another origin is refused; one from this server, or one
-// carrying no Origin/Referer (curl, scripts), is accepted.
 func TestSetupCrossSitePostRefused(t *testing.T) {
 	dev := newTestFocuser()
 	s := setupTestServer(t, dev)
@@ -222,8 +210,6 @@ func TestSetupCrossSitePostRefused(t *testing.T) {
 	}
 }
 
-// The server page names the configuration file the host started from, or says
-// there is none.
 func TestSetupServerPageShowsConfigPath(t *testing.T) {
 	s := New(Config{ServerName: "Rig", ConfigPath: "/etc/alpacahurd/hurd.json"})
 	if err := s.Register(customType, 0, newTestFocuser()); err != nil {
@@ -238,8 +224,6 @@ func TestSetupServerPageShowsConfigPath(t *testing.T) {
 	}
 }
 
-// The root redirects to /setup, and an unknown path answers a browser with an
-// HTML page linking to /setup while an API client still gets a plain 404.
 func TestRootAndNotFoundLeadToSetup(t *testing.T) {
 	s := setupTestServer(t, newTestFocuser())
 	w := do(t, s, http.MethodGet, "/", "")
@@ -259,8 +243,6 @@ func TestRootAndNotFoundLeadToSetup(t *testing.T) {
 	}
 }
 
-// Config.SetupPages mounts host pages under /setup/<name>, linked from /setup;
-// "v1" stays the spec's device pages and an unknown name is still a 403.
 func TestSetupHostPages(t *testing.T) {
 	hit := ""
 	s := New(Config{ServerName: "Rig", SetupPages: map[string]http.Handler{
@@ -289,8 +271,6 @@ func TestSetupHostPages(t *testing.T) {
 	}
 }
 
-// Config.SetupHome serves a host page at /setup in place of the server page,
-// which moves to /setup/server; / still redirects to /setup.
 func TestSetupHome(t *testing.T) {
 	s := New(Config{ServerName: "Rig", SetupHome: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("home page " + r.Method))

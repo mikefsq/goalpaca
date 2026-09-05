@@ -5,15 +5,9 @@ import (
 	"sync"
 )
 
-// BaseDevice provides the identity fields and the logical-connection
-// bookkeeping shared by every device. Authors embed it in their concrete type
-// and set the exported fields (typically in a constructor). It satisfies the
-// common Device interface, so a concrete type only needs to add the members of
-// its per-type interface (Camera, Focuser, ...).
-//
-// Connection state here is LOGICAL (per the spec §3.1): MarkConnected /
-// MarkDisconnected flip a flag only. They never touch hardware — that is owned
-// by Hardware.Open/Close for the life of the process.
+// BaseDevice provides identity and logical connection state for device drivers.
+// Set its exported identity fields during construction. Hardware access belongs
+// in Hardware.Open and Close, independently of the Connected flag.
 type BaseDevice struct {
 	// Identity — set these when constructing the device.
 	ID       string // UniqueID: stable GUID
@@ -72,9 +66,7 @@ func (b *BaseDevice) ConnectError() error { return b.connectOp.Err() }
 // async Connect/Disconnect.
 func (b *BaseDevice) ConnectOp() *Op { return &b.connectOp }
 
-// MarkConnected sets the logical Connected flag true. It has no hardware
-// effect (the Alpaca Connected flag is a per-client session marker); a driver
-// overriding Connect calls it once the session is established.
+// MarkConnected sets the logical Connected flag without touching hardware.
 func (b *BaseDevice) MarkConnected() {
 	b.mu.Lock()
 	b.connected = true
@@ -89,11 +81,7 @@ func (b *BaseDevice) MarkDisconnected() {
 	b.mu.Unlock()
 }
 
-// SupportedActions/Action/Command* default to "not implemented". Authors with
-// non-standard functionality override them.
-// Label is the identifier a driver puts in its log lines: the host's instance
-// name when there is one, else the UniqueID. A hurd logs "main-camera on
-// :11201" and the driver logs "main-camera acquired", so the two lines join.
+// Label returns the host's instance name, or UniqueID when no name is set.
 func (b *BaseDevice) Label() string {
 	if b.Instance != "" {
 		return b.Instance
@@ -119,8 +107,6 @@ func (b *BaseDevice) CommandBlind(cmd string, raw bool) error {
 	return ErrNotImplemented
 }
 
-// DeviceState defaults to nothing extra: the library already builds the
-// standard operational set from the typed getters. Override to ADD entries the
-// library cannot derive (per-switch values, vendor extras) or to override a
-// built entry by name — the result is merged into the built set.
+// DeviceState returns additional state entries, merged with the standard typed
+// getters. Entries with matching names override the standard values.
 func (b *BaseDevice) DeviceState() []StateValue { return nil }

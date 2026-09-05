@@ -54,8 +54,6 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	}
 }
 
-// The default settings key is <StateDir>/<type>-<number>.json; SettingsPath
-// replaces it with a host-supplied file.
 func TestSettingsPathDefaultAndOverride(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", "/state")
 	s := New(Config{ServerName: "rig", Settings: NewFileStore()})
@@ -234,10 +232,6 @@ func TestPersistedValuesAreTheSubmission(t *testing.T) {
 	}
 }
 
-// A persisted file may hold keys the form does not declare: a host-owned port
-// an orchestrator recorded beside the device's settings, or a field the driver
-// has since dropped. Load applies the declared keys and leaves the rest alone
-// rather than failing the whole apply.
 func TestLoadSkipsUndeclaredKeys(t *testing.T) {
 	dev := newTestFocuser()
 	path := filepath.Join(t.TempDir(), "focus.json")

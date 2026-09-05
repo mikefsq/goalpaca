@@ -22,8 +22,6 @@ func clearDirEnv(t *testing.T) {
 	t.Setenv("ALPACA_SYSTEM_SERVICE", "false")
 }
 
-// Each role honours the same resolution order: explicit override, then the
-// systemd variable, then the per-user location.
 func TestDirResolutionOrder(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -62,7 +60,6 @@ func TestDirResolutionOrder(t *testing.T) {
 	}
 }
 
-// The system-wide locations follow each platform's convention.
 func TestDirSystemService(t *testing.T) {
 	clearDirEnv(t)
 	t.Setenv("ALPACA_SYSTEM_SERVICE", "true")
@@ -83,7 +80,6 @@ func TestDirSystemService(t *testing.T) {
 	}
 }
 
-// The per-user locations follow XDG on Linux and the OS config dir elsewhere.
 func TestDirPerUser(t *testing.T) {
 	clearDirEnv(t)
 	if runtime.GOOS == "linux" {
@@ -109,7 +105,6 @@ func TestDirPerUser(t *testing.T) {
 	}
 }
 
-// ALPACA_SYSTEM_SERVICE overrides the root heuristic in both directions.
 func TestIsSystemServiceEnv(t *testing.T) {
 	t.Setenv("ALPACA_SYSTEM_SERVICE", "yes")
 	if !IsSystemService() {
@@ -139,7 +134,6 @@ func TestDirSanitizesName(t *testing.T) {
 	}
 }
 
-// The System* variants ignore the environment and report the service location.
 func TestSystemDirsIgnoreEnv(t *testing.T) {
 	clearDirEnv(t)
 	t.Setenv("ALPACA_CONFIG_DIR", "/override")

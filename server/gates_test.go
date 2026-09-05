@@ -14,24 +14,6 @@ import (
 	"github.com/mikefsq/goalpaca/sim"
 )
 
-// AN IN-PROCESS CALLER AND AN HTTP CLIENT GET THE SAME ANSWER.
-//
-// This is the property the exported gates exist for, so it is asserted directly rather than
-// inferred from both paths calling the same function. A host that links drivers in — goastro's
-// `local://` transport is the first — reaches a device without the HTTP dispatch, and before the
-// gates were exported it therefore reached it without the gates:
-//
-//	GetSwitch(9) on a 4-channel bank   over HTTP: InvalidValue      in-process: a slice-index PANIC
-//	Gain() where CanGain() is false    over HTTP: NotImplemented    in-process: the zero value
-//	a slew while parked                over HTTP: Parked            in-process: the mount moves
-//
-// The table below is the same request made both ways. Each case calls the exported gate directly
-// and issues the equivalent HTTP request against the SAME device, and requires the ASCOM error
-// NUMBER to match — the number, because that is what a client's error classification keys on, and
-// what decides whether an answer counts as a capability report, a refusal, or a fault.
-//
-// It fails if a gate is ever added to the dispatch without being exported, which is the way this
-// divergence would come back.
 func TestGatesAgreeInProcessAndOverHTTP(t *testing.T) {
 	cases := []struct {
 		name string

@@ -28,37 +28,22 @@ type SettingField struct {
 	Constraints string
 
 	// Locked marks a field whose value is pinned by a higher-precedence source
-	// (typically a hurd.conf override) and therefore cannot be changed here. The
+	// (typically a host config override) and therefore cannot be changed here. The
 	// framework renders it disabled, ignores it on submit, and never persists or
 	// restores it, so precedence stays default < persisted < host override. The
 	// device sets this for keys its host supplied; Source names that source for
-	// the note shown beside the control (e.g. "set in hurd.conf").
+	// the note shown beside the control (e.g. "set in host config").
 	Locked bool
 	Source string
 }
 
-// Configurable is an optional interface a Device may implement to expose a
-// browser configuration form at /setup/v1/{device_type}/{device_number}/setup,
-// as described by the ASCOM Alpaca Management API. The framework renders
-// SettingsForm() as an HTML form and, on submit, calls ApplySettings with the
-// posted name→value pairs.
+// Configurable supplies the device's browser setup form. ApplySettings runs
+// concurrently with device operations and must provide its own synchronization.
+// An error rejects the submission; success refreshes the form.
 //
-// A device that does not implement Configurable still gets a spec-conformant
-// "this device has no configurable settings" page. The Alpaca spec requires
-// the setup page to exist even when the device is not configurable.
-//
-// ApplySettings runs on an HTTP handler goroutine, concurrently with normal
-// device operation: the implementation owns its locking. Return a non-nil error
-// to reject the submission; its message is shown on the page and no success is
-// reported. On success the page re-renders from a fresh SettingsForm(), so
-// applied values are reflected back.
-//
-// Settings resolve by precedence: code default < persisted config file <
-// host override (hurd.conf). The framework enforces this around the interface:
-// a field the device marks Locked (pinned by the host) is never fed a persisted
-// value at startup and is dropped from any submit, so ApplySettings only ever
-// receives values for editable fields. ApplySettings must apply just the keys
-// it is given and leave the rest (including locked ones) untouched.
+// The server excludes locked fields from submissions and persisted settings.
+// ApplySettings must update only the supplied keys. Settings precedence is
+// code defaults, then persisted values, then host overrides.
 type Configurable interface {
 	SettingsForm() []SettingField
 	ApplySettings(values map[string]string) error
@@ -136,17 +121,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	s.renderDeviceSetup(w, r, devType, number, rd)
 }
 
-// sameOriginPost reports whether a POST to the setup pages came from a page
-// this server served. Browsers send Origin (or, older ones, Referer) on form
-// submissions; a value naming another host means a page elsewhere is trying to
-// drive this device, so it is refused. A request carrying neither header is
-// accepted, since curl and scripted clients on the local network send none and
-// browsers always send at least one for a cross-site POST.
-//
-// The Alpaca specification declares no security model, so this is a local
-// decision. It costs nothing for a legitimate browser session and closes the
-// case of a device on a LAN being reconfigured by any page a user happens to
-// visit.
+// sameOriginPost rejects submissions whose Origin or Referer names another host.
+// Requests without either header are accepted for non-browser clients.
 func sameOriginPost(r *http.Request) bool {
 	src := r.Header.Get("Origin")
 	if src == "" {
@@ -315,16 +291,9 @@ func (s *Server) renderDeviceSetup(w http.ResponseWriter, r *http.Request, devTy
 	_ = s.tmpl().device.Execute(w, view)
 }
 
-// applyForm applies a parsed settings submission to cfg and persists it under
-// saveKey when a store is configured and saveKey is non-empty. It returns the
-// banner text and kind for the page.
-//
-// What is persisted is the submission itself, laid over the editable values
-// the form held before it: the values the user asked for, not whatever the
-// device reports afterwards. A device that applies a submission partially and
-// still returns nil therefore persists what was submitted, and the persisted
-// file matches the user's last accepted request rather than drifting with the
-// device's own rounding or clamping.
+// applyForm applies and persists a settings submission, returning its banner.
+// Persistence overlays submitted values on the form's prior editable values;
+// it does not read back driver rounding or clamping.
 func (s *Server) applyForm(r *http.Request, cfg Configurable, saveKey string) (banner, kind string) {
 	if r.PostForm == nil {
 		if err := r.ParseForm(); err != nil {
@@ -386,7 +355,7 @@ func collectValues(fields []SettingField, r *http.Request) map[string]string {
 
 // snapshot captures a form's editable field values as a name→value map for
 // persistence; loading applies the same map back through ApplySettings. Locked
-// fields are excluded: their values belong to the host (hurd.conf), so storing
+// fields are excluded: their values belong to the host (host config), so storing
 // them would let a stale copy resurface if the host later releases the pin.
 func snapshot(fields []SettingField) map[string]string {
 	m := make(map[string]string, len(fields))

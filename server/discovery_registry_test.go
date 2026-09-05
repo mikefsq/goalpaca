@@ -13,9 +13,6 @@ import (
 	"time"
 )
 
-// TestRegistrationsLocalAndRemote: a heartbeat from one of the host's own
-// addresses is local and its port is answered directly; a heartbeat from
-// elsewhere is remote and a probe relays to it, carrying the client's address.
 func TestRegistrationsLocalAndRemote(t *testing.T) {
 	// The "remote" device is an HTTP server on loopback; the table is told the
 	// host's addresses are 10.0.0.5 alone, so loopback would count as local by
@@ -95,8 +92,6 @@ func TestRegistrationsLocalAndRemote(t *testing.T) {
 	}
 }
 
-// TestRegistrationsExpireAndReplace: a stale entry drops out after the TTL,
-// and a heartbeat with the same UniqueID on a new port replaces the old entry.
 func TestRegistrationsExpireAndReplace(t *testing.T) {
 	reg := NewRegistrations(50 * time.Millisecond)
 	src := net.ParseIP("127.0.0.1")
@@ -111,8 +106,6 @@ func TestRegistrationsExpireAndReplace(t *testing.T) {
 	}
 }
 
-// TestRelayReportsFailure: an unreachable remote surfaces through onErr and
-// does not block the others.
 func TestRelayReportsFailure(t *testing.T) {
 	reg := NewRegistrations(time.Minute)
 	reg.localIPs = func() []net.IP { return nil }

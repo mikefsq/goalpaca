@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// TestReusePortCoBind proves two sockets can co-bind the same UDP port via
-// reuseControl — the property Direct discovery relies on for multiple device
-// processes on one host.
 func TestReusePortCoBind(t *testing.T) {
 	lc := net.ListenConfig{Control: reuseControl}
 	const addr = "0.0.0.0:45227"
@@ -30,10 +27,6 @@ func TestReusePortCoBind(t *testing.T) {
 	defer b.Close()
 }
 
-// Co-binding alone isn't enough: a discovery probe is a BROADCAST, and every co-bound
-// responder must receive it or only one device shows up in a Discover list. This is the
-// property that actually makes -advertise (and multi-device direct discovery) work, and
-// it is the one that differs most across platforms — so assert it rather than assume it.
 func TestReusePortBroadcastReachesEveryCoBoundSocket(t *testing.T) {
 	lc := net.ListenConfig{Control: reuseControl}
 	const port = 45228

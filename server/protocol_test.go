@@ -45,7 +45,6 @@ func decodeValue(t *testing.T, rec *httptest.ResponseRecorder) valueResponse {
 	return vr
 }
 
-// Bad URL structure must be rejected (4XX). Mirrors ConformU TestCommon URL checks.
 func TestProtocolBadURLsRejected(t *testing.T) {
 	s := newTestServer(t) // camera registered at device 0, connected
 	bad := []string{
@@ -69,7 +68,6 @@ func TestProtocolBadURLsRejected(t *testing.T) {
 	}
 }
 
-// Only GET and PUT are allowed; other methods are rejected.
 func TestProtocolBadHTTPMethods(t *testing.T) {
 	s := newTestServer(t)
 	for _, m := range []string{http.MethodPost, http.MethodDelete} {
@@ -80,7 +78,6 @@ func TestProtocolBadHTTPMethods(t *testing.T) {
 	}
 }
 
-// Common GET members return a well-formed 200 JSON envelope.
 func TestProtocolCommonGetMembers(t *testing.T) {
 	s := newTestServer(t)
 	members := []string{
@@ -106,7 +103,6 @@ func TestProtocolCommonGetMembers(t *testing.T) {
 	}
 }
 
-// Member names are case-insensitive (ConformU requires this).
 func TestProtocolMemberNameCaseInsensitive(t *testing.T) {
 	s := newTestServer(t)
 	for _, m := range []string{"connected", "Connected", "CONNECTED"} {
@@ -117,7 +113,6 @@ func TestProtocolMemberNameCaseInsensitive(t *testing.T) {
 	}
 }
 
-// A malformed PUT parameter value is a protocol error -> HTTP 400.
 func TestProtocolBadPutValue(t *testing.T) {
 	s := newTestServer(t)
 	for _, v := range []string{"", "123456", "asdqwe"} {
@@ -129,9 +124,6 @@ func TestProtocolBadPutValue(t *testing.T) {
 	}
 }
 
-// ClientTransactionID round-trips when valid, echoes 0 when missing/invalid;
-// param names are case-insensitive, order-independent, and spurious params are
-// ignored. Mirrors ConformU's ClientID/ClientTransactionID matrix.
 func TestProtocolClientTransactionIDEcho(t *testing.T) {
 	s := newTestServer(t)
 	const path = "/api/v1/camera/0/connected"
@@ -163,7 +155,6 @@ func TestProtocolClientTransactionIDEcho(t *testing.T) {
 	}
 }
 
-// ServerTransactionID is present and strictly increasing across requests.
 func TestProtocolServerTransactionIDMonotonic(t *testing.T) {
 	s := newTestServer(t)
 	first := decodeValue(t, rawGet(s, "/api/v1/camera/0/name")).ServerTransactionID
@@ -206,16 +197,6 @@ func invertCase(s string) string {
 	return string(b)
 }
 
-// Config.StrictParamCasing switches PUT parameter-name matching from the
-// spec's default case-insensitive lookup to exact matching, so a badly-cased
-// required parameter is treated as missing (400) — what ConformU's "Check
-// Alpaca Protocol" mode "Bad casing" tests require for PUT — while the
-// default mode tolerates it (200), per specs/AlpacaDeviceAPI_v1.yaml.
-// ClientID/ClientTransactionID are tolerated in both modes and for both HTTP
-// methods: a badly-cased one is ignored (echoes 0), never rejected. GET
-// parameters (e.g. Telescope's AxisRates) stay case-insensitive even in
-// strict mode — ConformU's own GET-parameter "Inverted casing" tests require
-// a 200, the opposite of its PUT expectation.
 func TestProtocolStrictParamCasing(t *testing.T) {
 	const path = "/api/v1/camera/0/connected"
 
@@ -254,7 +235,6 @@ func TestProtocolStrictParamCasing(t *testing.T) {
 	}
 }
 
-// The JSON envelope uses the exact ASCOM field casing.
 func TestProtocolResponseFieldCasing(t *testing.T) {
 	s := newTestServer(t)
 	body := rawGet(s, "/api/v1/camera/0/name").Body.String()

@@ -56,8 +56,6 @@ func TestDiscover(t *testing.T) {
 	}
 }
 
-// TestReadResponsesIPv6 exercises the IPv6 read/parse path (the dual-stack
-// addition) over loopback, without relying on multicast routing.
 func TestReadResponsesIPv6(t *testing.T) {
 	cli, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
 	if err != nil {
@@ -101,8 +99,6 @@ func TestConfiguredDevices(t *testing.T) {
 	}
 }
 
-// TestDiscoverContextCancel verifies DiscoverContext returns promptly with
-// ctx.Err() when cancelled mid-window, instead of blocking out the timeout.
 func TestDiscoverContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -119,8 +115,6 @@ func TestDiscoverContextCancel(t *testing.T) {
 	}
 }
 
-// TestConfiguredDevicesContextCancel verifies a hung management endpoint is
-// abandoned when the context is cancelled.
 func TestConfiguredDevicesContextCancel(t *testing.T) {
 	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // never answer

@@ -1,26 +1,6 @@
-// Package server is a library for hosting one or more hardware devices as a
-// standalone ASCOM Alpaca server (HTTP/JSON REST + UDP discovery).
-//
-// A device author implements a typed per-type interface (Camera, Focuser, ...)
-// plus the Hardware lifecycle interface; this library handles the wire
-// protocol, discovery participation, async semantics, image transport, and
-// liveness. One process owns the hardware for its entire life — the Alpaca
-// Connected flag is a logical per-client session marker, never a hardware
-// open/close (see BaseDevice and the Hardware interface).
-//
-// # Protocol compliance
-//
-// The library enforces the device-independent ASCOM rules in its HTTP dispatch
-// layer, before a driver method runs: parameter-range validation (returning
-// InvalidValue), capability-flag gating (a member returns NotImplemented when
-// its CanXxx reports false), telescope parked gating (ParkedException from
-// movement members while AtPark), target read-before-set and image-not-ready
-// gating (InvalidOperation), and the ITelescopeV4 sidereal-only rate-offset,
-// axis-rate, and drive-rate rules. A driver that implements the typed
-// interfaces is therefore Alpaca/ConformU-conformant without writing any of
-// this — it implements only hardware-specific behavior, and may impose its
-// own stricter hardware limits, which run after these gates. All ten device
-// types built on this library pass ASCOM ConformU v4.4.0 with zero issues.
+// Package server hosts ASCOM Alpaca devices over HTTP with UDP discovery.
+// Drivers implement a typed device interface and, for hardware access, Hardware.
+// The server handles wire encoding, discovery, and common protocol validation.
 package server
 
 import "context"
@@ -40,8 +20,8 @@ type Device interface {
 	InterfaceVersion() int
 
 	// Logical connection — NOT hardware open/close (see Hardware).
-	Connect(ctx context.Context) error    // marks this client session connected
-	Disconnect(ctx context.Context) error // marks it disconnected; hardware stays up
+	Connect(ctx context.Context) error    // sets logical connection state
+	Disconnect(ctx context.Context) error // clears logical state; hardware stays open
 	Connected() bool
 	Connecting() bool // Platform 7 async-connect state
 
@@ -60,45 +40,27 @@ type Device interface {
 	DeviceState() []StateValue
 }
 
-// Hardware is the persistent-owner lifecycle. If a registered Device also
-// implements Hardware, Open is called once when the Server Runs and Close once
-// at graceful shutdown; a Reload closes the old device and opens its
-// replacement the same way. The SDK handle / cooling loop lives for the whole
-// process, independent of any Alpaca client's Connected state.
+// Hardware manages a device's hardware independently of its logical connection.
+// The server calls Open at startup or registration and Close at shutdown,
+// unregistration, or reload. A reload opens the replacement after closing the old device.
 //
-// Open's ctx lives until the server closes the device: it is cancelled before
-// Close is called, so a loop Open started under it (an acquire-monitor loop,
-// say) sees the end. Close has to wait for that loop to stop before it
-// releases the handle, or the loop's next pass re-acquires the hardware from
-// under the device replacing it. RunLoop and its returned stop do this.
+// Open's context is cancelled before Close. Close must wait for background
+// workers to stop before releasing hardware; see RunLoop.
 type Hardware interface {
 	Open(ctx context.Context) error  // open SDK, start regulation goroutine
 	Close(ctx context.Context) error // release on shutdown only
 }
 
-// Busyable is an optional interface. If a registered Device implements it, the
-// server rejects mutating PUTs with InvalidOperation while Busy() is true — i.e.
-// while the device is in a transitory state (a camera exposing/reading, a
-// focuser/rotator/wheel moving). Reads are never gated, and the interrupt
-// members that end an in-flight operation are exempt so it can always be
-// stopped — e.g. abortexposure, stopexposure, abortslew, haltcover,
-// calibratoroff, halt, and the async-cancel members (see interruptMembers for
-// the full set). Busy() must be cheap and non-blocking: it is consulted on
-// every write request.
+// Busyable lets the server reject mutating PUTs while a device is busy.
+// Reads and interrupt members remain available; see interruptMembers.
+// Busy must be cheap and non-blocking. Drivers must also guard concurrent starts.
 type Busyable interface {
 	Busy() bool
 }
 
-// ConnectErrorReporter is an optional interface for the Platform 7 async
-// connect pattern: when a device implements it and an async Connect/Disconnect
-// has FAILED (no longer in flight, error recorded), a GET of the `connecting`
-// completion property reports that error in-band instead of a bare false — so
-// a client polling for completion learns WHY the connect failed rather than
-// seeing a device that silently never became connected.
-//
-// BaseDevice implements it via ConnectOp: drivers that run async connects
-// through ConnectOp().Begin/Complete/Fail get failure surfacing for free; the
-// error clears on the next Begin or Reset.
+// ConnectErrorReporter supplies the error returned by the connecting property
+// after an asynchronous Connect or Disconnect fails. BaseDevice implements it
+// through ConnectOp; Begin and Reset clear the error.
 type ConnectErrorReporter interface {
 	ConnectError() error
 }

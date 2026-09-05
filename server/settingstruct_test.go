@@ -202,8 +202,6 @@ func TestApplyToStructRejects(t *testing.T) {
 	}
 }
 
-// A bad value anywhere in the submission leaves every field untouched, not
-// just the bad one.
 func TestApplyToStructAtomic(t *testing.T) {
 	cfg := &everyKind{Name: "keep", Count: 5}
 	err := ApplyToStruct(cfg, map[string]string{"name": "changed", "count": "999"})

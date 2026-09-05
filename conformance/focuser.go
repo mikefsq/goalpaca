@@ -14,15 +14,8 @@ import (
 // from the clock, so a few steps of slack avoids flakiness.
 const focuserPositionTolerance = 5
 
-// CheckFocuser runs the ConformU Focuser conformance checks against f. Ported
-// from ConformU's FocuserTester (CheckProperties / CheckMethods): NotConnected
-// gating, capability/property consistency and ranges, absolute Move arrival,
-// out-of-range Move clamped gracefully to the limits, Halt, and TempComp read/write.
-//
-// The simulator is an absolute focuser (Absolute()==true), so relative-focuser
-// behaviour (Move treated as a signed delta, MaxIncrement bounding a single
-// relative step) is not exercised here. StepSize is read but not range-checked
-// beyond being error-free, matching the sim's fixed value.
+// CheckFocuser checks absolute movement, limits, Halt, and temperature compensation.
+// It assumes an absolute focuser and does not test relative movement.
 func CheckFocuser(t *testing.T, f *client.Focuser) {
 	t.Helper()
 

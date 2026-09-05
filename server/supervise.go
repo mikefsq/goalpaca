@@ -6,15 +6,8 @@ import (
 	"time"
 )
 
-// Supervise runs fn and, if it panics, recovers, logs, and restarts it after a
-// short backoff — repeating until ctx is cancelled. It isolates a device's
-// background loop so a panic in one device does not crash the process (and with
-// it the other devices sharing it). A normal return from fn ends supervision
-// (treated as graceful shutdown, e.g. on ctx cancel).
-//
-// Panics are reported through the standard logger (log.Printf) — deliberately
-// independent of any Config.Logger, so a supervised crash is always loud;
-// redirect it with log.SetOutput if needed.
+// Supervise restarts fn after a panic, logging through log.Printf and waiting
+// one second between attempts. A normal return or cancelled ctx ends supervision.
 func Supervise(ctx context.Context, name string, fn func()) {
 	for ctx.Err() == nil {
 		returned := func() (returned bool) {
@@ -33,23 +26,10 @@ func Supervise(ctx context.Context, name string, fn func()) {
 	}
 }
 
-// RunLoop starts fn under Supervise in the background, on a context derived
-// from ctx, and returns a stop function for Close: it cancels that context and
-// blocks until fn has ended, or until timeout. A device's Open runs its
-// acquire-monitor loop through it and its Close stops the loop before
-// releasing the handle, so the loop cannot re-acquire the hardware between the
-// two, which is what a Reload needs; and Close needs no help from the caller
-// to end the loop.
-//
-//	func (d *Dev) Open(ctx context.Context) error {
-//		d.stopLoop = server.RunLoop(ctx, d.ID, d.manageHardware)
-//		return nil
-//	}
-//	func (d *Dev) Close(context.Context) error {
-//		d.stopLoop(10 * time.Second)
-//		d.teardown()
-//		return nil
-//	}
+// RunLoop starts fn under Supervise with a child context. The returned stop
+// function cancels that context and waits for fn to end, up to timeout.
+// Call stop before releasing hardware in Close. The loop must honor cancellation;
+// a timeout is logged but does not prevent stop from returning.
 func RunLoop(ctx context.Context, name string, fn func(ctx context.Context)) (stop func(timeout time.Duration)) {
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

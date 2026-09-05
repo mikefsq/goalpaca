@@ -148,7 +148,6 @@ func TestStructConfigDeviceRejects(t *testing.T) {
 	}
 }
 
-// A device with a config struct but no Reconfigure gets a read-only form.
 func TestStructConfigWithoutReconfigureIsReadOnly(t *testing.T) {
 	dev := &plainDevice{}
 	dev.ID, dev.DevName = "p", "Plain"
@@ -167,8 +166,6 @@ func TestStructConfigWithoutReconfigureIsReadOnly(t *testing.T) {
 	}
 }
 
-// A device that implements Configurable itself is used as-is; the adapter is
-// never consulted even when one is attached.
 func TestOwnConfigurableBypassesAdapter(t *testing.T) {
 	dev := newTestFocuser() // implements Configurable directly
 	s := setupTestServer(t, dev)
@@ -206,9 +203,6 @@ func TestNewStructConfigErrors(t *testing.T) {
 	}
 }
 
-// A stored value outside a tag's range must still render and round-trip: the
-// config file supplied it, and a zero meaning "unset" under min=40 is common.
-// Only a submission is range-checked.
 func TestStructConfigStoredValueOutsideRangeRenders(t *testing.T) {
 	dev := &reconfigurableDevice{}
 	s, sc := newAdapterServer(t, dev, `{"fpsPercent":0}`, nil) // 0 < min 40

@@ -70,8 +70,6 @@ func TestRunUnknownDriver(t *testing.T) {
 	}
 }
 
-// -check constructs the device from file plus flags without serving, and the
-// entry it builds decodes strictly in the driver.
 func TestRunCheckFromFileAndFlags(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "f1.json")
@@ -190,9 +188,6 @@ func TestStripComments(t *testing.T) {
 	}
 }
 
-// Serving: the device answers Alpaca, the setup form is generated from the
-// config struct with file keys pinned, a live change reaches Reconfigure, and
-// the state file lands beside the device file's name under StateDir.
 func TestRunServesWithSetupForm(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -288,8 +283,6 @@ func waitUp(t *testing.T, url string) {
 	t.Fatalf("server at %s did not come up", url)
 }
 
-// TestRunReloadRereadsFile: a reload from the setup page rebuilds the device
-// from the file as it is now, keeps the port, and re-applies persisted state.
 func TestRunReloadRereadsFile(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -350,9 +343,6 @@ func TestRunReloadRereadsFile(t *testing.T) {
 	<-done
 }
 
-// TestAfterRegisterHook: the hook runs with the assembled entry (front-end
-// keys like lx200Port included) and a getter for the current device, before
-// the server begins serving.
 func TestAfterRegisterHook(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "hooked.json")
@@ -413,9 +403,6 @@ func init() {
 	})
 }
 
-// TestFrontEndInvocation: devicemain calls the driver's FrontEnd before
-// serving, with the whole assembled entry, empty hosts (the server binds
-// every interface), a getter that resolves the device, and the serve context.
 func TestFrontEndInvocation(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "fe.json")
@@ -454,7 +441,6 @@ func TestFrontEndInvocation(t *testing.T) {
 	}
 }
 
-// The driver's state file and the setup form's are one file.
 func TestDeviceStatePathIsTheSettingsFile(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", "/state")
 	got := deviceStatePath("rst", "rst")

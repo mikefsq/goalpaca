@@ -69,7 +69,6 @@ func TestFocuserRoundTrip(t *testing.T) {
 	}
 }
 
-// A device fault maps to *server.AlpacaError and matches by number via errors.Is.
 func TestErrorMapping(t *testing.T) {
 	ts := newServer(t)
 	f := NewFocuser(ts.URL, 0)
@@ -87,7 +86,6 @@ func TestErrorMapping(t *testing.T) {
 	}
 }
 
-// A malformed parameter is rejected at the HTTP level -> *RequestError (400).
 func TestBadParameterIsRequestError(t *testing.T) {
 	ts := newServer(t)
 	f := NewFocuser(ts.URL, 0)

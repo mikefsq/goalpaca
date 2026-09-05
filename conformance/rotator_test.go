@@ -9,8 +9,6 @@ import (
 	"github.com/mikefsq/goalpaca/sim"
 )
 
-// TestRotatorConformance runs the ported ConformU Rotator checks through the
-// client against the in-process simulator (sim -> server -> client).
 func TestRotatorConformance(t *testing.T) {
 	srv := server.New(server.Config{Discovery: server.DiscoveryConfig{Mode: server.DiscoveryOff}})
 	// Fast rate so moves resolve quickly in tests.

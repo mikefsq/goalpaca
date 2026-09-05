@@ -6,28 +6,16 @@ import (
 	"sync"
 )
 
-// Reconfigurable is the hook a device implements to receive live setting
-// changes from a generated setup form. The framework fills a fresh copy of the
-// device's config struct (the one its Config func returns) with the current
-// values plus the submitted changes, then calls Reconfigure with it. The device
-// applies what it can change at run time and returns an error to reject the
-// submission.
-//
-// A device that does not implement Reconfigurable still gets a generated form
-// for display, but every field renders locked, since nothing could act on a
-// change.
+// Reconfigurable receives a fresh config struct containing current values and
+// submitted changes. Return an error to reject the submission.
+// Without this interface, a generated setup form is read-only.
 type Reconfigurable interface {
 	Reconfigure(cfg any) error
 }
 
-// StructConfig adapts a device to Configurable from a tagged config struct, so
-// the device implements no form code. It is the generic path a host uses when a
-// registry driver supplies Config; a device that implements Configurable itself
-// bypasses it (see configurableFor).
-//
-// The adapter holds the current field values. Construct one with
-// NewStructConfig, seeding it from the device's effective config, and register
-// the device through Server.RegisterConfigurable so the setup page finds it.
+// StructConfig implements Configurable using a tagged config struct.
+// Construct it with NewStructConfig and attach it with RegisterConfigurable.
+// A device's own Configurable implementation takes precedence.
 type StructConfig struct {
 	newCfg  func() any      // returns a pointer to a zero config struct
 	dev     Device          // the device changes are delivered to
@@ -201,10 +189,8 @@ func (a *StructConfig) Values() map[string]string {
 
 var _ Configurable = (*StructConfig)(nil)
 
-// RegisterConfigurable attaches a Configurable to an already-registered device,
-// so the setup page renders it in place of the device's own (absent)
-// implementation. A host uses this with a StructConfig built from a registry
-// driver's Config func. It must be called before Run.
+// RegisterConfigurable attaches a setup form to a registered device.
+// If the server is running, it applies persisted settings immediately.
 func (s *Server) RegisterConfigurable(devType DeviceType, number int, c Configurable) error {
 	s.mu.Lock()
 	rd, ok := s.devices[regKey{devType, number}]

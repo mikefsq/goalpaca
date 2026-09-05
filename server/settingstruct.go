@@ -94,7 +94,7 @@ func jsonFieldName(sf reflect.StructField) (name string, skip bool) {
 // options as a select, and any other string as text.
 //
 // A field named in locked is rendered Locked with lockSource as its Source, so
-// a host can pin values it owns (a hurd.conf key) and the framework will refuse
+// a host can pin values it owns (a host config key) and the framework will refuse
 // to change them. A field tagged when=start is rendered Locked too, with a
 // note that it applies at the next start: the setup page changes live values
 // only, and start-time values belong to the config file.

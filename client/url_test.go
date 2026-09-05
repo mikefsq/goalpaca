@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// urlAuthority must percent-encode an IPv6 zone (RFC 6874) so link-local discovery
-// results — the form Alpaca IPv6 discovery returns — are usable in a URL. Everything
-// else passes through untouched.
 func TestURLAuthority(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"10.0.1.176:11112", "10.0.1.176:11112"},                                                   // IPv4
@@ -33,8 +30,6 @@ func TestURLAuthority(t *testing.T) {
 	}
 }
 
-// The encoded authority must parse as a URL and round-trip the zone back to its raw form
-// (Go decodes %25 → % in Hostname), which is what makes the dialer reach the link-local host.
 func TestURLAuthorityParsesAndRoundTrips(t *testing.T) {
 	u, err := url.Parse("http://" + urlAuthority("[fe80::1%eth0]:11112"))
 	if err != nil {
@@ -48,10 +43,6 @@ func TestURLAuthorityParsesAndRoundTrips(t *testing.T) {
 	}
 }
 
-// A Windows zone (an interface name with spaces) must parse and round-trip too. This is the
-// regression: the zone body used to be embedded raw, so every management/configureddevices
-// probe against a link-local Windows address failed with "invalid character \" \" in host
-// name" and discovery silently skipped the host.
 func TestURLAuthorityWindowsZoneParsesAndRoundTrips(t *testing.T) {
 	const raw = `[fe80::ecac:ca83:5438:3c7b%Ethernet Instance 0]:11110`
 	u, err := url.Parse("http://" + urlAuthority(raw) + "/management/v1/configureddevices")
@@ -67,8 +58,6 @@ func TestURLAuthorityWindowsZoneParsesAndRoundTrips(t *testing.T) {
 	}
 }
 
-// normalizeBaseURL must produce a parseable base URL for a link-local address (it previously
-// embedded the raw zone, which url.Parse rejected as an invalid escape).
 func TestNormalizeBaseURLZone(t *testing.T) {
 	for _, addr := range []string{
 		"[fe80::1%eth0]:11112",                                  // unix-style zone

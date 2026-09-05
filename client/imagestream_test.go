@@ -139,9 +139,6 @@ func camAt(t testing.TB, srv *httptest.Server) *Camera {
 	return NewCamera(srv.Listener.Addr().String(), 0)
 }
 
-// TestImageArrayIntoMatchesImageArrayCtx pins that the streaming path produces exactly the samples
-// the buffering path does — including the column-major → row-major transpose, which is the one
-// thing a streaming decoder can silently get wrong and still return a plausible image.
 func TestImageArrayIntoMatchesImageArrayCtx(t *testing.T) {
 	// Deliberately not a multiple of the scratch size, and odd in both axes, so elements straddle
 	// Write boundaries and the carry path is exercised rather than skipped.
@@ -338,10 +335,6 @@ func BenchmarkImage122MBParallel(b *testing.B) {
 	}
 }
 
-// TestParallelSinkMatchesScalar pins the fanned-out conversion against the scalar one on a frame
-// whose dimensions force both the column-boundary split and the cross-chunk carry. A parallel
-// transpose is exactly where an off-by-one hides: it produces a full image, correctly sized, with
-// a fraction of the samples in the wrong place.
 func TestParallelSinkMatchesScalar(t *testing.T) {
 	const w, h = 337, 199
 	srv, want := imageServer(t, w, h)
@@ -380,13 +373,6 @@ func BenchmarkImage4MBParallel(b *testing.B) {
 	}
 }
 
-// TestJSONServerFallsBackOnceNotEveryFrame pins the cost of a server that ignores the ImageBytes
-// Accept negotiation.
-//
-// Streaming cannot decode the JSON ImageArray form, so such a server must fall back — but the
-// fallback has to be a DISCOVERY, made once, not a toll paid on every exposure. Before the latch,
-// each frame cost an extra request plus up to a megabyte of JSON read and thrown away, on exactly
-// the older servers least able to spare it.
 func TestJSONServerFallsBackOnceNotEveryFrame(t *testing.T) {
 	var streamAttempts int
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {

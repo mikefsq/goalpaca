@@ -5,19 +5,8 @@ import (
 	"time"
 )
 
-// deviceStateValues builds the Platform 7 DeviceState operational-property set
-// for a device, appending the mandatory ISO-8601 UTC TimeStamp. The library
-// composes this from the typed interface getters, so a driver gets a correct
-// DeviceState for free (it need not implement DeviceState itself) — then the
-// driver's own DeviceState() is merged in: entries override library-built
-// values by name, new names are appended. That is how a driver publishes state
-// the library cannot derive (per-switch values, vendor extras) or corrects a
-// built entry.
-//
-// Properties whose getter returns an error (e.g. NotImplemented) are omitted,
-// matching ASCOM's rule that DeviceState carries only supported operational
-// properties. The exact per-type sets follow the ASCOM Master Interface
-// Definitions (Platform 7).
+// deviceStateValues collects typed operational getters, omitting errors.
+// Driver entries override matching names. A UTC TimeStamp is added if absent.
 func deviceStateValues(devType DeviceType, dev Device) []StateValue {
 	var sv []StateValue
 	switch devType {
@@ -163,14 +152,8 @@ func focuserStateValues(f Focuser) []StateValue {
 	return sv
 }
 
-// switchStateValues builds the per-switch DeviceState set. ISwitchV3 has no scalar
-// operational property: its state is indexed, and the spec says to append the switch
-// number to each property name, so a device with four switches publishes GetSwitch0..3,
-// GetSwitchValue0..3 and StateChangeComplete0..3 (plus the TimeStamp added by the
-// caller). A client polling devicestate thus gets the whole switch bank in one round
-// trip instead of 3·MaxSwitch separate GETs — which is the point of the property.
-//
-// Entries whose getter errors are omitted, as everywhere else in DeviceState.
+// switchStateValues appends the channel number to each operational property
+// name, as required by ISwitchV3. Getters that return errors are omitted.
 func switchStateValues(s Switch) []StateValue {
 	max := s.MaxSwitch()
 	sv := make([]StateValue, 0, 3*max)

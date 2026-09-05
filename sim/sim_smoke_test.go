@@ -44,8 +44,6 @@ func mustConnect(t *testing.T, c connector) {
 	}
 }
 
-// TestAllSimsSmoke drives one happy path and one validation path per simulator,
-// through the client library, confirming the whole stack works for every type.
 func TestAllSimsSmoke(t *testing.T) {
 	url := allSimsServer(t)
 

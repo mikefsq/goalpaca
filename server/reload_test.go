@@ -59,9 +59,6 @@ func runServer(t *testing.T, s *Server) {
 	}
 }
 
-// TestReloadSwapsDeviceAndHardware: Reload closes the old device's hardware,
-// swaps in what the Reloader built, opens its hardware, and the server serves
-// the new device on the same port.
 func TestReloadSwapsDeviceAndHardware(t *testing.T) {
 	first := newHWCamera("first")
 	second := newHWCamera("second")
@@ -118,8 +115,6 @@ func TestReloadSwapsDeviceAndHardware(t *testing.T) {
 	}
 }
 
-// TestReloadFailureLeavesOldDevice: a Reloader error changes nothing, and a
-// hardware Open failure on the new device leaves it serving unopened.
 func TestReloadFailureLeavesOldDevice(t *testing.T) {
 	first := newHWCamera("first")
 	s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "reload"})
@@ -164,8 +159,6 @@ func TestReloadFailureLeavesOldDevice(t *testing.T) {
 	}
 }
 
-// TestReloadFromSetupPage: the device page's reload form runs Reload and the
-// page offers it only when a Reloader is set.
 func TestReloadFromSetupPage(t *testing.T) {
 	first := newHWCamera("first")
 	second := newHWCamera("second")
@@ -210,9 +203,6 @@ func TestReloadFromSetupPage(t *testing.T) {
 	}
 }
 
-// TestLiveRegisterAndUnregister: a device added to a running server has its
-// hardware opened at once and answers; unregistering closes it and frees the
-// number.
 func TestLiveRegisterAndUnregister(t *testing.T) {
 	first := newHWCamera("first")
 	s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, ServerName: "live"})

@@ -213,16 +213,8 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 		transmit = frame.ElementType
 	}
 	pixels := data[dataStart:]
-	// The DETACH COPY is only made when nothing else is going to allocate.
-	//
-	// Pixels must not alias data, because the caller owns that buffer and is free to reuse it. But
-	// transposeElems ALREADY returns a fresh allocation, so on the ordinary path — a rank-2 frame
-	// from any camera — copying first and transposing second allocated and walked the whole frame
-	// twice to produce one result. At 122 MB a frame that is a wasted allocation and a wasted pass.
-	//
-	// So the transpose consumes the caller's buffer directly (it only reads it) and the copy is
-	// kept for the paths where no transpose runs: rank 3, an unknown element width, or a payload
-	// whose length disagrees with its dimensions.
+	// Pixels must not alias the caller's buffer. Transposition allocates its own
+	// output; copy only when no transpose runs.
 	if es := ElementSize(transmit); frame.Rank == 2 && es > 0 &&
 		frame.Width > 0 && frame.Height > 0 && len(pixels) == frame.Width*frame.Height*es {
 		frame.Pixels = transposeElems(pixels, frame.Width, frame.Height, es)
@@ -232,12 +224,8 @@ func DecodeImageBytes(data []byte) (ImageFrame, error) {
 	return frame, nil
 }
 
-// ImageBytesHeader is the fixed 44-byte metadata prefix, parsed on its own.
-//
-// It exists so a client can size and shape its destination BEFORE the pixels arrive, which is what
-// makes a streaming decode possible: everything needed to allocate the final buffer — the element
-// type actually on the wire, the rank, and the three dimensions — is in the first 44 bytes.
-// DecodeImageBytes cannot serve that purpose because it takes the whole payload by value.
+// ImageBytesHeader is the fixed 44-byte metadata prefix. It can be parsed
+// before downloading pixels to allocate a streaming destination.
 type ImageBytesHeader struct {
 	ErrorNumber             int
 	DataStart               int

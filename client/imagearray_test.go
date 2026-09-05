@@ -23,10 +23,6 @@ func jsonOnlyImageServer(t *testing.T, body string) *httptest.Server {
 	return ts
 }
 
-// TestImageArrayJSONFallback verifies the client decodes the mandatory
-// plain-JSON ImageArray form from a server that ignores
-// Accept: application/imagebytes: wire [Width][Height] (Y fastest) →
-// row-major pixels, matching what DecodeImageBytes produces.
 func TestImageArrayJSONFallback(t *testing.T) {
 	// 3 wide x 2 high, Value[x][y]: row-major sequence is 1..6.
 	ts := jsonOnlyImageServer(t,
@@ -50,8 +46,6 @@ func TestImageArrayJSONFallback(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONFallbackRank3 verifies rank-3 colour decode, with Rank
-// inferred from nesting when the envelope omits it.
 func TestImageArrayJSONFallbackRank3(t *testing.T) {
 	ts := jsonOnlyImageServer(t,
 		`{"Type":2,"Value":[[[10,20,30]],[[40,50,60]]],"ClientTransactionID":1,"ServerTransactionID":1,"ErrorNumber":0,"ErrorMessage":""}`)
@@ -72,8 +66,6 @@ func TestImageArrayJSONFallbackRank3(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONFallbackRagged verifies a ragged Value is rejected
-// instead of decoded into a torn frame.
 func TestImageArrayJSONFallbackRagged(t *testing.T) {
 	ts := jsonOnlyImageServer(t,
 		`{"Type":2,"Rank":2,"Value":[[1,2],[3]],"ClientTransactionID":1,"ServerTransactionID":1,"ErrorNumber":0,"ErrorMessage":""}`)
@@ -84,10 +76,6 @@ func TestImageArrayJSONFallbackRagged(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONRoundTrip drives the real goalpaca server's JSON
-// ImageArray path (no ImageBytes Accept header) end-to-end through the
-// client decoder and checks it matches the frame the ImageBytes transport
-// yields.
 func TestImageArrayJSONRoundTrip(t *testing.T) {
 	dev := &fakeCamera{}
 	dev.DevName = "Cam"

@@ -25,16 +25,9 @@ type SettingsStore interface {
 	Save(key string, values map[string]any) error
 }
 
-// FileStore is a SettingsStore that keeps one JSON file per device: the key is
-// the file path. Writes are atomic (temp file + rename), the file is created
-// mode 0600, and its directory is created on first save. Safe for concurrent
-// use.
-//
-// One file per device lets an orchestrator edit the same file, since there is
-// no shared index and the only coordination needed is an atomic write. The
-// device's UniqueID plays no part in the path. A camera bound by enumeration
-// index rewrites its UniqueID once its hardware is opened, and with a path key
-// it still loads and saves under one stable name.
+// FileStore saves one JSON file per settings key. Writes use a temporary file
+// and atomic rename with mode 0600; parent directories are created as needed.
+// It is safe for concurrent use. Keys are paths, independent of device UniqueID.
 type FileStore struct {
 	mu sync.Mutex
 }

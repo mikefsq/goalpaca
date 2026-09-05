@@ -35,10 +35,6 @@ func getImageArrayJSON(t *testing.T, s *Server) (typ, rank int, value json.RawMe
 	return env.Type, env.Rank, env.Value, env.ErrorNumber
 }
 
-// TestImageArrayJSON verifies the mandatory plain-JSON ImageArray transport: a
-// GET without Accept: application/imagebytes must return the Type/Rank/Value
-// envelope with Value in the ASCOM [Width][Height] wire order (Y varying
-// fastest — the same transpose the ImageBytes path applies).
 func TestImageArrayJSON(t *testing.T) {
 	s := newTestServer(t)
 	put(t, s, "/api/v1/camera/0/startexposure", url.Values{"Duration": {"1.0"}, "Light": {"true"}})
@@ -94,9 +90,6 @@ func registerFrame(t *testing.T, frame ImageFrame) *Server {
 	return s
 }
 
-// TestImageArrayJSONTranspose pins the exact wire order with a tiny
-// asymmetric frame: 3 wide x 2 high, row-major pixels 1..6 →
-// Value[x][y] = [[1,4],[2,5],[3,6]].
 func TestImageArrayJSONTranspose(t *testing.T) {
 	pix := make([]byte, 6*2)
 	for i := 0; i < 6; i++ {
@@ -119,8 +112,6 @@ func TestImageArrayJSONTranspose(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONRank3 verifies rank-3 (colour) frames stream as
-// [Width][Height][Planes] triple-nested arrays.
 func TestImageArrayJSONRank3(t *testing.T) {
 	// 2 wide x 1 high x 3 planes, wire-order bytes 10,20,30 (x=0) 40,50,60 (x=1).
 	pix := []byte{10, 20, 30, 40, 50, 60}
@@ -144,7 +135,6 @@ func TestImageArrayJSONRank3(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONDouble verifies float frames stream as JSON doubles.
 func TestImageArrayJSONDouble(t *testing.T) {
 	pix := make([]byte, 8*2)
 	binary.LittleEndian.PutUint64(pix[0:], math.Float64bits(1.5))
@@ -168,8 +158,6 @@ func TestImageArrayJSONDouble(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONMalformed verifies a frame whose pixel buffer doesn't
-// match its declared geometry produces an in-band JSON error, not a panic.
 func TestImageArrayJSONMalformed(t *testing.T) {
 	s := registerFrame(t, ImageFrame{
 		Rank: 2, Width: 4, Height: 4,
@@ -183,8 +171,6 @@ func TestImageArrayJSONMalformed(t *testing.T) {
 	}
 }
 
-// TestImageArrayJSONNoImage verifies the no-image device error round-trips
-// the JSON envelope (no Accept header) as an in-band error.
 func TestImageArrayJSONNoImage(t *testing.T) {
 	s := newTestServer(t) // fakeCamera with no exposure started
 	_, _, _, errNum := getImageArrayJSON(t, s)

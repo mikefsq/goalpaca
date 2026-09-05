@@ -28,7 +28,7 @@ func TestRegisterLookupAll(t *testing.T) {
 	if _, ok := Lookup("t-alpha"); !ok {
 		t.Fatal("Lookup(t-alpha) not found")
 	}
-	// Lookup is case-insensitive (configs historically accepted any case).
+	// Lookup is case-insensitive.
 	if _, ok := Lookup("T-Alpha"); !ok {
 		t.Fatal("Lookup(T-Alpha) not found (case-insensitive)")
 	}
@@ -143,7 +143,6 @@ func TestCommonKeysCopy(t *testing.T) {
 	}
 }
 
-// TestPackagePath: a driver's package path is read off its New function.
 func TestPackagePath(t *testing.T) {
 	d := Driver{New: func(Spec) (server.Device, error) { return nil, nil }}
 	if got := d.PackagePath(); got != "github.com/mikefsq/goalpaca/registry" {

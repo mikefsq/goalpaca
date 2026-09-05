@@ -9,15 +9,8 @@ import (
 	"github.com/mikefsq/goalpaca/server"
 )
 
-// CheckCamera runs the ConformU Camera conformance checks against c. Ported from
-// ConformU's CameraTester (CheckProperties / CheckMethods): NotConnected gating,
-// sensor geometry and description, binning ranges, subframe/gain/offset
-// round-trips, cooling with cooler set-point limit validation, the exposure
-// happy path (StartExposure → poll ImageReady → ImageArray frame) with the
-// CameraState transition and last-exposure UTC start-time format/recency,
-// mid-exposure Stop (keeps the frame) / Abort (discards it), and out-of-range
-// → InvalidValue. Assertions are aligned to the goalpaca camera simulator and
-// assume short exposures.
+// CheckCamera checks camera properties, exposure, image transport, and errors.
+// It assumes the goalpaca simulator's geometry, capabilities, and short exposures.
 func CheckCamera(t *testing.T, c *client.Camera) {
 	t.Helper()
 
@@ -460,7 +453,7 @@ func CheckCamera(t *testing.T, c *client.Camera) {
 	}
 	// The aborted exposure must never yield an image: ImageReady stays false
 	// (checked past the original exposure window would be ideal, but 2s is too
-	// slow for a unit run; immediately-after is the regression that mattered)
+	// slow for a unit run)
 	// and ImageArray reports InvalidOperation.
 	if ready, err := c.ImageReady(); err != nil || ready {
 		t.Errorf("ImageReady() after abort = %v, %v; want false", ready, err)

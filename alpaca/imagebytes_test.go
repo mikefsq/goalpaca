@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// TestImageBytesTranspose locks the ASCOM ImageBytes ordering: a Rank-2 frame is
-// supplied row-major (X fastest) and must go onto the wire column-major (Y fastest),
-// and DecodeImageBytes must restore the original row-major buffer. A non-square frame
-// (W != H) is used so a transpose error can't hide.
 func TestImageBytesTranspose(t *testing.T) {
 	w, h := 3, 2 // row-major values 0..5: row0=[0,1,2], row1=[3,4,5]
 	src := make([]byte, w*h*2)
@@ -59,9 +55,6 @@ func BenchmarkTranspose62MP(b *testing.B) {
 	}
 }
 
-// TestTransposeParallelCorrect exercises the parallel/tiled path (frame larger than
-// parallelMinElems, non-square so a band-split bug can't hide): exact orientation vs a
-// naive reference, plus the round-trip identity.
 func TestTransposeParallelCorrect(t *testing.T) {
 	const w, h = 1500, 900 // 1.35M elems > parallelMinElems → fans out across cores
 	if w*h < parallelMinElems {

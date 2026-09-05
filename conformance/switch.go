@@ -9,15 +9,8 @@ import (
 	"github.com/mikefsq/goalpaca/server"
 )
 
-// CheckSwitch runs the ConformU Switch conformance checks against c. Ported from
-// ConformU's SwitchTester (CheckProperties / CheckMethods): NotConnected gating,
-// MaxSwitch read, per-switch property/range consistency (name, description,
-// CanWrite, min/max/step), analog and boolean read/write round-trips, and
-// out-of-range / invalid-Id → InvalidValue rejections.
-//
-// The async members (SetAsync, SetAsyncValue, CancelAsync, StateChangeComplete)
-// are intentionally skipped because the simulator's CanAsync is false (the
-// BaseSwitch default); see switchdevSkipped.
+// CheckSwitch checks channel properties, writes, and invalid IDs and values.
+// It assumes synchronous channels and omits asynchronous operations.
 func CheckSwitch(t *testing.T, c *client.Switch) {
 	t.Helper()
 

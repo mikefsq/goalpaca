@@ -212,8 +212,6 @@ func TestManagement(t *testing.T) {
 	}
 }
 
-// TestRegisterTypeCheck verifies Register rejects a device that does not
-// implement the typed interface for its DeviceType.
 func TestRegisterTypeCheck(t *testing.T) {
 	s := New(Config{Discovery: DiscoveryConfig{Mode: DiscoveryOff}})
 	cam := newFakeCamera()
@@ -225,8 +223,6 @@ func TestRegisterTypeCheck(t *testing.T) {
 	}
 }
 
-// TestManagementGETOnly verifies the management endpoints reject non-GET
-// methods (the spec defines them as GET-only).
 func TestManagementGETOnly(t *testing.T) {
 	s := newTestServer(t)
 	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodDelete} {
@@ -246,8 +242,6 @@ func TestManagementGETOnly(t *testing.T) {
 	}
 }
 
-// TestPortZero verifies Run with AlpacaPort 0 records the OS-assigned port and
-// Port() exposes it.
 func TestPortZero(t *testing.T) {
 	s := New(Config{AlpacaPort: 0, Discovery: DiscoveryConfig{Mode: DiscoveryOff}, Hosts: []string{"127.0.0.1"}})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -271,7 +265,6 @@ func TestPortZero(t *testing.T) {
 	}
 }
 
-// TestOpTryBegin verifies TryBegin's atomic check-and-start semantics.
 func TestOpTryBegin(t *testing.T) {
 	var op Op
 	if !op.TryBegin() {

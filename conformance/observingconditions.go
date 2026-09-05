@@ -8,16 +8,8 @@ import (
 	"github.com/mikefsq/goalpaca/server"
 )
 
-// CheckObservingConditions runs the ConformU ObservingConditions conformance
-// checks against c. Ported from ConformU's ObservingConditionsTester
-// (CheckProperties / CheckMethods): NotConnected gating, AveragePeriod
-// read/write with InvalidValue rejection of values below the permitted minimum,
-// every sensor getter readable within its ASCOM-sensible range, Refresh, and the
-// SensorDescription / TimeSinceLastUpdate metadata methods.
-//
-// The goalpaca sim implements all optional sensors, so the optional-sensor
-// "NotImplemented" handling (where a sensor and its description / time-of-last-
-// update must consistently be implemented or not) is not exercised here.
+// CheckObservingConditions checks readings, averaging, and sensor metadata.
+// It assumes all optional sensors are implemented, as in the goalpaca simulator.
 func CheckObservingConditions(t *testing.T, c *client.ObservingConditions) {
 	t.Helper()
 

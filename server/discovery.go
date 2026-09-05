@@ -64,7 +64,7 @@ func (s *Server) startDiscovery(ctx context.Context) {
 // The IPv4 socket is bound with SO_REUSEADDR/SO_REUSEPORT (see reuseControl) so
 // several device processes can share 32227 on one host; each answers broadcast
 // probes with its own port. (Directed unicast probes reach only one of them —
-// use Register mode with discovery_proxy if that matters.)
+// use Register mode with discover_proxy if that matters.)
 func (s *Server) runDirectDiscovery(ctx context.Context) {
 	// IPv4 broadcast responder.
 	lc := net.ListenConfig{Control: reuseControl}

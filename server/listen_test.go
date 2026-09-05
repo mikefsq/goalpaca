@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// TestRunBindsConfiguredHostsBothStacks verifies that Config.Hosts binds one
-// listener per address and that the server answers over each — including IPv6.
-// This is the server-side guard for the fleet regression where restricting the
-// bind to a single IPv4 address silently dropped IPv6 reachability.
 func TestRunBindsConfiguredHostsBothStacks(t *testing.T) {
 	port := freePort(t)
 	s := New(Config{
@@ -64,11 +60,6 @@ func freePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// With AlpacaPort 0 and a PortScanBase, Run binds the first free port at or
-// above the base and Port reports it. Two servers scanning the same base get
-// distinct ports, because the bind is the probe: the second finds the first's
-// port taken and moves on. AlpacaPort 0 with no base keeps the OS-assigned
-// port.
 func TestPortScan(t *testing.T) {
 	base := 40000 + int(time.Now().UnixNano()%1000)*10 // avoid collisions across runs
 	mk := func() *Server {

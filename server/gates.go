@@ -1,53 +1,8 @@
 package server
 
-// The spec-fixed ASCOM compliance gates, exported so that EVERY host applies the same ones.
-//
-// gate.go states the rule these implement: they are device-independent conditions fixed by the
-// ASCOM master interface definitions and enforced by ConformU — Can-flag → NotImplemented mapping,
-// parameter ranges, parked gating, switch-Id bounds — and enforcing them in the library is what
-// lets a driver implement only hardware-specific behaviour and still present a compliant device.
-//
-// # Why they had to become exported functions
-//
-// They used to live INSIDE the HTTP dispatch (camera_http.go, telescope_http.go, switch.go, …),
-// which was correct while HTTP was the only way to reach a device. It is not any more: a host can
-// link drivers in and call them directly, and goastro's `local://` transport does exactly that.
-// Such a host bypasses the dispatch layer, and with it every gate — so one driver reached two ways
-// gave two different answers:
-//
-//	GetSwitch(9) on a 4-channel bank   over HTTP: InvalidValue      in-process: a slice-index PANIC
-//	Gain() where CanGain() is false    over HTTP: NotImplemented    in-process: the zero value
-//	a slew while parked                over HTTP: Parked            in-process: the mount moves
-//
-// The first is a crash, the second is a capability answer silently replaced by a plausible number,
-// and the third moves hardware the spec says must not move.
-//
-// # Why free functions rather than a decorator
-//
-// A `Gate(dev) Device` decorator is the obvious shape and it cannot work here, for a reason this
-// library already documents in camera.go: *"ASCOM expresses an absent gain by the Gain property
-// itself throwing NotImplemented, which the int-typed getters here cannot do."* `Camera.Gain() int`
-// has nowhere to put an error, so a decorator cannot gate precisely the members that need gating.
-//
-// A decorator is also actively hazardous in this library. Six optional interfaces are discovered by
-// type assertion on a registered device — Hardware, Busyable, ConnectErrorReporter, Configurable,
-// Reconfigurable — and a wrapper satisfies none of them unless it forwards all six, which Go cannot
-// express. Losing the Hardware assertion in particular means a device's SDK is never opened, with
-// every simulator test still green, because no simulator implements Hardware.
-//
-// So: free functions, taking the typed device and the caller's typed arguments, returning the ASCOM
-// error or nil. The HTTP dispatch calls them where it used to inline them, so there is ONE copy and
-// an in-process host reaches the same behaviour by calling the same function.
-//
-// # What is NOT here
-//
-// Request PARSING. "Id is missing", "Brightness is not an integer" and similar are facts about an
-// HTTP query string, not about a device, and an in-process caller passes a typed value that cannot
-// be malformed. Those stay in the dispatch.
-
-// The four ASCOM error shapes a gate produces, exported so a host or driver can answer the same way
-// the library does. Each is the wire's error NUMBER plus a message naming the member, which is what
-// a client's error classification keys on.
+// The Gate functions validate typed calls before dispatch to a driver.
+// HTTP handlers apply them automatically; in-process callers must apply the
+// matching gates themselves. Request parsing remains in the HTTP handlers.
 
 // NotImplementedError builds the ASCOM NotImplemented (0x400) answer: the device has no such
 // control. It is a CAPABILITY answer, not a failure — a client must not count it as a fault.
@@ -66,19 +21,12 @@ func ParkedError(member string) error { return parkedErr(member) }
 
 // ---- Switch -----------------------------------------------------------------
 
-// GateSwitchID enforces the ISwitchV3 rule that every Id-taking member rejects an out-of-range Id
-// (0..MaxSwitch-1) with InvalidValue, BEFORE any other processing.
-//
-// The "before any other processing" is the load-bearing part and the reason this gate matters more
-// than the others: a driver is entitled to assume a valid Id, and goalpaca's own switch simulator
-// indexes its channel slice directly. An unchecked Id is not a wrong answer, it is a panic.
+// GateSwitchID rejects IDs outside [0, MaxSwitch). Call it before any
+// ID-taking driver method, including capability getters.
 func GateSwitchID(sw Switch, id int) error { return validSwitchID(sw, id) }
 
-// GateSwitchValue bounds a value WRITE against the channel's own Min/Max, after gating the Id.
-//
-// The bounds are consulted best-effort: a channel that will not report a minimum or a maximum is
-// not bounded here, because refusing every write to a channel that declines to describe itself is
-// worse than letting the driver arbitrate. That is the existing behaviour, preserved deliberately.
+// GateSwitchValue validates the ID and the channel's Min/Max range.
+// If either bound is unavailable, the driver must validate the value.
 func GateSwitchValue(sw Switch, id int, value float64) error {
 	if err := validSwitchID(sw, id); err != nil {
 		return err

@@ -1,23 +1,14 @@
-// Package devicemain is the main function for a standalone Alpaca device
-// binary. A driver author supplies the hardware knowledge, registered as a
-// registry.Driver, and imports the rest:
+// Package devicemain runs registered drivers as standalone Alpaca servers.
+// It supplies config files, flags, setup forms, persistence, and discovery.
 //
 //	package main
 //
 //	import (
 //		"github.com/mikefsq/goalpaca/devicemain"
-//		_ "example.com/mywidget" // registers the driver
+//		_ "example.com/mywidget"
 //	)
 //
 //	func main() { devicemain.Run("mywidget") }
-//
-// Run looks the driver up in the registry and supplies everything that is not
-// device-specific: the flag set (one flag per key of the driver's Config
-// struct, plus -config, -port, -discovery, -check, -schema), the device file
-// reader, the generated setup form, persistence under the state directory, the
-// Alpaca HTTP server, and discovery. A binary built this way behaves the same as
-// the same driver compiled into alpacahurd, because both paths construct the
-// device through the same registry entry.
 package devicemain
 
 import (
@@ -39,8 +30,7 @@ import (
 	"github.com/mikefsq/goalpaca/server"
 )
 
-// Options tune Run for a binary that needs more than the defaults. The zero
-// value is what most binaries want.
+// Options configures RunWith. The zero value uses the command-line defaults.
 type Options struct {
 	// Args are the command-line arguments to parse. Nil means os.Args[1:].
 	Args []string
@@ -77,9 +67,8 @@ type Options struct {
 	AfterRegister func(ctx context.Context, dev func() server.Device, entry map[string]json.RawMessage) error
 }
 
-// Run serves the named driver as a standalone Alpaca device and returns when
-// the server stops. It exits the process on a usage error, the way a main
-// function does; RunWith is the same without the exit, for tests.
+// Run serves a registered driver until shutdown and exits with status 1 on error.
+// Use RunWith to receive the error without exiting.
 func Run(driverName string) {
 	if err := RunWith(driverName, Options{}); err != nil {
 		fmt.Fprintln(os.Stderr, driverName+": "+err.Error())
@@ -376,13 +365,8 @@ func RunWith(driverName string, opt Options) error {
 	return srv.Run(ctx)
 }
 
-// deviceStatePath is where a device's settings live: under the driver's state directory, keyed
-// by instance. Empty when there is no instance, since a run with no device file has no name to
-// key on and nothing to persist.
-//
-// Under systemd this resolves through $STATE_DIRECTORY rather than the driver name, so every
-// device an orchestrator launches shares one directory and is told apart by instance. Run the
-// same binary by hand and it lands under the per-user state directory instead.
+// deviceStatePath returns the instance's settings path under StateDir.
+// An unnamed instance has no persistent settings path.
 func deviceStatePath(driverName, instance string) string {
 	if instance == "" {
 		return ""
@@ -390,9 +374,8 @@ func deviceStatePath(driverName, instance string) string {
 	return filepath.Join(server.StateDir(driverName), "devices", instance+".json")
 }
 
-// ReadDeviceFile reads one device file: a JSON object that may carry // and
-// /* */ comments, which are stripped before decode. Comments let a seeded file
-// document every key at its default without setting any of them.
+// ReadDeviceFile reads a device entry as JSONC, accepting // and /* */ comments.
+// Trailing commas are not supported.
 func ReadDeviceFile(path string) (map[string]json.RawMessage, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

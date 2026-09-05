@@ -1,9 +1,6 @@
-// Package conformance ports ASCOM ConformU's device-conformance checks into Go
-// tests that drive the goalpaca client library. Each Check* function takes a
-// constructed client and asserts the ASCOM spec behaviour (capability/property
-// consistency, async-operation completion, and error semantics) using ConformU's
-// *Tester logic as the reference. The same checks can run in-process against the
-// simulators (over httptest) or against an external Alpaca server by address.
+// Package conformance provides ConformU-derived checks through typed clients.
+// Checks target the goalpaca simulators and may assume their capabilities and
+// values. Adapt those assumptions before using the checks with hardware.
 package conformance
 
 import (
@@ -14,11 +11,8 @@ import (
 	"github.com/mikefsq/goalpaca/server"
 )
 
-// SettleTimeout bounds every asynchronous-completion wait in the checks
-// (slews, exposures, wheel moves, connects). The default suits the fast
-// in-process simulators; raise it substantially (minutes) when running the
-// checks against real hardware, whose moves take as long as they take —
-// ConformU's own settle timeouts are configurable for the same reason.
+// SettleTimeout bounds asynchronous waits. The default suits the simulators;
+// increase it when adapting checks for slower hardware.
 var SettleTimeout = 6 * time.Second
 
 // CommonDevice is the ICommon surface shared by every typed client (satisfied by

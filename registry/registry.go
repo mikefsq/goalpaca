@@ -1,34 +1,6 @@
-// Package registry is the process-wide driver catalogue that lets a composed
-// Alpaca server (the alpacahurd "herd of alpaca daemons", or any other host)
-// construct devices from a config file without compile-time knowledge of each
-// driver.
-//
-// A driver package registers itself from init():
-//
-//	func init() {
-//		registry.Register(registry.Driver{
-//			Name:          "tenmicron",
-//			Type:          server.TelescopeType,
-//			Description:   "10Micron GM-series mount over TCP",
-//			ConfigExample: `{ "driver": "tenmicron", "addr": "10.0.1.51:3492" }`,
-//			New:           newFromSpec,
-//		})
-//	}
-//
-// so a host binary selects drivers purely by importing their packages (typically
-// via a generated file of blank imports), and the set of available drivers is
-// exactly the set compiled in.
-//
-// # Config ownership
-//
-// One JSON config entry declares one device. The host owns the common keys
-// (CommonKeys: "driver", "name", "enable", "port", "device", "exec", the
-// INDI/LX200 front-end keys, and the optics block); everything else in the entry belongs to the
-// driver, which decodes it from Spec.Raw via Spec.Decode into its own config
-// struct. Decode is strict — unknown keys are errors — so a typo in a device
-// entry is reported instead of silently ignored, without the host needing to
-// know any driver's fields. A driver must not name its own fields after a
-// common key: those are stripped before Decode sees them.
+// Package registry catalogs drivers that hosts construct from configuration.
+// Drivers register from init; hosts select available drivers through imports.
+// Spec.Decode strips host-owned CommonKeys and rejects unknown driver fields.
 package registry
 
 import (
@@ -58,60 +30,32 @@ type Driver struct {
 	// Description is a one-line human summary for driver listings.
 	Description string
 
-	// ConfigExample is a complete example config entry for this driver: one JSON
-	// object including the "driver" key and this driver's own fields, WITHOUT
-	// "port" (the host injects a free port when it assembles a full example
-	// config). It must parse as JSON; hosts may print it verbatim or merge it
-	// into a generated starter config.
+	// ConfigExample is a valid JSON device entry including the driver key and
+	// driver-specific fields. Omit port so the host can assign one.
 	ConfigExample string
 
-	// New constructs the device from its config entry. It must not touch
-	// hardware: acquisition happens later, in the device's own lifecycle
-	// (acquire, monitor, re-acquire), so a device can be configured before its
-	// hardware is attached.
+	// New constructs a device without accessing hardware. Acquire hardware in
+	// the device's Hardware lifecycle.
 	New func(Spec) (server.Device, error)
 
-	// MultiKey, when set, names the entry key holding an array of per-device
-	// blocks for a driver that serves several devices of its type from one
-	// entry (astrocam's "cameras"). A host that finds the key expands the
-	// entry into one Spec per block — the block body as Raw, the block's
-	// position as Device — and constructs each through New. An entry without
-	// the key stays the flat one-device form. Hosts that never expand (a
-	// single-device binary) ignore it.
+	// MultiKey names an optional array of devices in an entry. Supporting hosts
+	// expand each block into a Spec, using its array index as Device. Hosts that
+	// do not expand blocks ignore this field.
 	MultiKey string
 
-	// FrontEnd, when set, wires the driver's extra protocol front-end onto a
-	// registered device (a mount's LX200 bridge, say). Every host calls it
-	// once per registered device of this driver whose Alpaca server is up, so
-	// an entry means the same thing compiled in and as a separate binary. The
-	// hook decides from the entry whether to do anything (lx200Port absent:
-	// return nil); an error is reported by the host and the device serves
-	// without the front-end.
+	// FrontEnd starts an optional protocol front-end after registration. Errors
+	// leave the Alpaca device serving without the front-end.
 	//
-	// The contract:
-	//   - ctx is the device's: the host cancels it when the device is
-	//     unregistered (or the host stops), and calls FrontEnd again if the
-	//     device is registered again. A front-end serves until ctx ends.
-	//   - dev returns the device currently registered, or nil while there is
-	//     none (mid-reload, after an unregister); resolve it per use and
-	//     handle nil.
-	//   - entry is the device's config entry: the whole file for a flat
-	//     entry, the device's block for a MultiKey entry, so a front-end key
-	//     belongs in the block.
-	//   - hosts are the addresses the device's Alpaca server binds ("listen"
-	//     restrictions included); a front-end binds the same ones. Empty
-	//     means every interface.
-	//   - FrontEnd must return promptly: it may be called under a host lock,
-	//     so serving and slow work belong in goroutines that end with ctx.
+	// Return promptly; start serving in goroutines that stop when ctx ends.
+	// The host cancels ctx on unregistration and calls FrontEnd on re-registration.
+	// Resolve dev on each use and handle nil during reload or unregistration.
+	// entry is the flat config entry or the individual MultiKey block.
+	// Bind the supplied hosts; an empty slice means all interfaces.
 	FrontEnd func(ctx context.Context, dev func() server.Device, entry json.RawMessage, hosts []string) error
 
-	// Config, when set, returns a pointer to a zero value of the driver's config
-	// struct: the same struct New decodes its entry into. The struct's fields
-	// carry `json` tags naming the config keys and `alpaca` tags describing the
-	// setup form (server.ParseSettingTag), so a host can render a browser
-	// configuration form and validate submissions without per-driver form code.
-	// Optional; a driver that leaves it nil gets the "no configurable settings"
-	// setup page unless it implements server.Configurable itself.
+	// Config returns a pointer to a zero-valued config struct used by New.
+	// Its json and alpaca tags define the generated setup form. A device's own
+	// server.Configurable implementation takes precedence.
 	Config func() any
 }
 
@@ -120,21 +64,16 @@ type Spec struct {
 	Driver string // the entry's "driver" key (canonical registered casing)
 	Name   string // the entry's "name" display-name override; "" when unset
 
-	// Instance is the entry's identity as the host names it: a devices.d file's
-	// stem, or "" for an inline entry. It is the word that joins a host's log
-	// lines to a driver's, so a driver puts it in its own log lines through
-	// server.BaseDevice.Label.
+	// Instance is the host's entry name, usually a device file's stem.
+	// Copy it to server.BaseDevice.Instance for consistent log labels.
 	Instance string
 
 	// Raw is the entire JSON config entry, common keys included. Drivers decode
 	// their own fields from it with Decode.
 	Raw json.RawMessage
 
-	// Device is the ASCOM device number the host will register this device
-	// under, when the host knows it at construction time (a pinned "device"
-	// key, or a block's position in a MultiKey entry); zero otherwise. A
-	// driver whose devices default their hardware binding to their position
-	// (astrocam's enumeration index) reads it for that default.
+	// Device is the host-assigned device number, or zero when not yet known.
+	// A MultiKey expansion uses the block's array index.
 	Device int
 }
 

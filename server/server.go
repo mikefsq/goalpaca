@@ -18,7 +18,7 @@ type DiscoveryMode int
 
 const (
 	// DiscoveryRegister sends a periodic unicast heartbeat to a discovery
-	// server (device shares the server's host). Default.
+	// server on the same host or a routed network. Default.
 	DiscoveryRegister DiscoveryMode = iota
 	// DiscoveryDirect binds UDP 32227 (with SO_REUSEADDR/SO_REUSEPORT, so
 	// multiple device processes can share the port on one host) and self-answers
@@ -293,18 +293,11 @@ func New(cfg Config) *Server {
 	}
 }
 
-// Register adds a device at the given type/number. Numbers are per type and
-// must be unique. The device must implement the typed interface matching
-// devType (e.g. Camera for CameraType) — registering a mismatch would
-// otherwise surface only as confusing "unknown member" responses at runtime.
-//
-// Before Run, the device waits for Run to load its settings and open its
-// hardware with the others. After Run has started, Register does both at once
-// (a hardware Open failure is logged, as at start, and the device still
-// serves), so a host can add a device to a running server; a Configurable
-// attached afterwards through RegisterConfigurable has the persisted settings
-// applied then, under the key SettingsPath set by that point. Unregister is
-// the inverse.
+// Register adds a device under a unique type and number. The device must
+// implement the interface matching devType.
+// Before Run, settings and hardware wait for startup. On a running server,
+// settings load and hardware opens immediately; Open failures are logged and
+// the device remains registered.
 func (s *Server) Register(devType DeviceType, number int, d Device) error {
 	if d == nil {
 		return errors.New("goalpaca: nil device")
@@ -524,7 +517,7 @@ func (s *Server) Run(ctx context.Context) error {
 // SettingsStore is configured), establishing the precedence
 // code default < persisted < host config: the host's own values are pinned in
 // the form (see StructConfig), so
-// persistence can never clobber a hurd.conf value. Errors are logged and
+// persistence can never clobber a host config value. Errors are logged and
 // skipped — a bad or missing store must never stop the server.
 func (s *Server) loadSettings() {
 	if s.cfg.Settings == nil {
@@ -609,14 +602,8 @@ func (s *Server) openHardware(ctx context.Context) {
 	}
 }
 
-// openHardwareFor opens one device's hardware when it has any and it is not
-// open. Open runs under a context of its own, derived from Run's, that
-// closeHardwareFor cancels: a loop the device starts in Open lives until the
-// device is closed, whether it was opened at start or by a Reload from a
-// request whose own context ends when the response does. A failure is logged
-// and reported; the device stays registered and its members answer
-// NotConnected or errors, with a supervised restart or a reload as the
-// recovery.
+// openHardwareFor opens hardware under a context lasting until device closure.
+// Failures are logged and returned; the device remains registered.
 func (s *Server) openHardwareFor(ctx context.Context, rd *registeredDevice) error {
 	s.mu.RLock()
 	dev, open, base := rd.dev, rd.hw != nil, s.runCtx

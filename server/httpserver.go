@@ -55,9 +55,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	case path == "/" && r.Method == http.MethodGet:
-		// The spec defines no root page. A person typing the address is looking
-		// for the setup page, the spec's "well known new user starting point", so
-		// send them there; a host that carries one page of its own points here.
+		// Use the setup page as the browser entry point.
 		http.Redirect(w, r, "/setup", http.StatusFound)
 	default:
 		s.notFound(w, r)
@@ -137,18 +135,11 @@ var interruptMembers = map[string]bool{
 	"abortexposure": true,
 	"stopexposure":  true,
 	"halt":          true,
-	// AbortSlew is THE way a client halts a slew or a continuous MoveAxis move (both set
-	// Slewing → Busy), so it must work while Busy — without this it returns
-	// InvalidOperation and the mount can never be stopped. MoveAxis is exempt for the
-	// same reason: ASCOM defines rate 0 as the stop for an axis in motion (ConformU
-	// stops exactly this way), and a rate change mid-move is legal — the device
-	// arbitrates inappropriate calls, the gate cannot.
+	// AbortSlew and zero-rate MoveAxis stop motion. The driver arbitrates
+	// other MoveAxis calls while busy.
 	"abortslew": true,
 	"moveaxis":  true,
-	// HaltCover is the interrupt for cover motion (OpenCover/CloseCover set
-	// CoverMoving → Busy); CalibratorOff ends a CalibratorOn ramp
-	// (CalibratorChanging → Busy) and is the safety path for turning the light
-	// off — both must reach a busy CoverCalibrator.
+	// HaltCover stops cover motion; CalibratorOff interrupts a light ramp.
 	"haltcover":     true,
 	"calibratoroff": true,
 	// CancelAsync is ISwitchV3's interrupt for an in-flight SetAsync/SetAsyncValue
@@ -156,14 +147,8 @@ var interruptMembers = map[string]bool{
 	"cancelasync": true,
 }
 
-// passthroughMembers are the opaque, device-arbitrated members the server does NOT
-// motion-gate: the raw vendor command passthroughs (ASCOM Command*) and custom
-// Actions. The server can't tell a read from a write through them, and clients send
-// read-only queries this way that must work mid-slew — the NINA 10Micron plugin
-// reading meridian limits/the alignment model, or an Action reading telemetry, while
-// the mount moves. A native COM driver doesn't motion-gate them, so neither do we:
-// the device arbitrates an inappropriate command. They are NOT connection-exempt (a
-// call to a disconnected device still returns NotConnected).
+// passthroughMembers bypass busy gating because vendor commands and Actions
+// may be reads. Drivers must arbitrate them. Connection gating still applies.
 var passthroughMembers = map[string]bool{
 	"commandstring": true,
 	"commandbool":   true,
@@ -264,11 +249,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, devType Devic
 		return
 	}
 
-	// Busy gating: while the device is in a transitory state (exposing, moving),
-	// reject mutating writes so a second request can't clobber the operation in
-	// progress. Reads (GET) are never gated this way; the connection controls and
-	// explicit interrupts (abort/stop/halt) are exempt so a client can always
-	// disconnect or stop the device.
+	// Allow interrupts and connection controls while busy.
 	if !connectionExemptMembers[member] && !interruptMembers[member] && !passthroughMembers[member] {
 		if busy, ok := dev.(Busyable); ok && busy.Busy() {
 			writeMethod(w, ErrInvalidOperation, p.clientTransactionID, serverTx)

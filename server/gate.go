@@ -7,14 +7,8 @@ import (
 	"time"
 )
 
-// This file holds the spec-fixed compliance gates the library applies in the
-// HTTP dispatch layer, before a driver method is called. The rules here are
-// device-independent — parameter ranges, Can-flag → NotImplemented mapping,
-// parked gating, and similar conditions fixed by the ASCOM master interface
-// definitions and enforced by ConformU. Enforcing them here means any driver
-// that implements the typed interfaces presents a compliant Alpaca device;
-// drivers only implement hardware-specific behavior (and may impose stricter
-// hardware limits of their own, which run after these gates).
+// HTTP compliance checks validate parameters, capabilities, and device state
+// before calling driver methods. Drivers enforce their own hardware limits.
 
 // invalidValuef builds an InvalidValue (0x401) error with a descriptive message.
 func invalidValuef(format string, a ...any) error {

@@ -95,17 +95,8 @@ type Device struct {
 	http       *http.Client // JSON-envelope calls: overall per-request timeout
 	imageHTTP  *http.Client // image downloads: connection-level limits only
 
-	// noStream latches a server that ignores the ImageBytes Accept negotiation, so ImageArrayInto
-	// stops attempting a streamed download against it.
-	//
-	// Without it the penalty recurs on EVERY FRAME: a request that is answered with JSON, up to a
-	// megabyte of that JSON read to look for an error envelope, and then the whole image fetched a
-	// second time through ImageArrayCtx. One wasted request per device is a discovery; one per
-	// frame is a regression, and it would land on exactly the older servers least able to afford it.
-	//
-	// A pointer because Device is returned by value from newDevice and atomic.Bool must not be
-	// copied. Never cleared: a server does not learn to speak ImageBytes mid-session, and re-probing
-	// would reintroduce the per-frame cost this exists to remove.
+	// noStream caches a refused ImageBytes negotiation for this Device's lifetime.
+	// Use a pointer because Device is copied and atomic.Bool must not be copied.
 	noStream *atomic.Bool
 }
 
@@ -176,18 +167,8 @@ func normalizeBaseURL(address string) string {
 	return strings.TrimRight(a, "/")
 }
 
-// urlAuthority converts a dialable host:port — which may carry a raw IPv6 zone such as
-// "[fe80::1%eth0]:11111" — into an authority safe to embed in a URL. RFC 6874 requires the
-// zone delimiter '%' to be written as "%25"; a raw "%zone" is otherwise rejected by the URL
-// parser as an invalid escape, so link-local IPv6 servers (the ones Alpaca IPv6 discovery
-// finds) can't be reached. Addresses without a zone pass through unchanged.
-//
-// The zone body is percent-encoded too, not just the delimiter: RFC 6874 admits only
-// unreserved characters and pct-encoded octets in a ZoneID, and a zone is an interface
-// identifier whose form is platform-dependent. On Linux/BSD it is a short name ("eth0")
-// that needs no encoding, but on Windows it is the interface name — routinely with spaces,
-// e.g. "Ethernet Instance 0" — which the URL parser rejects outright ('invalid character
-// " " in host name'). Encoding the body keeps link-local discovery working there.
+// urlAuthority escapes an IPv6 zone delimiter and identifier per RFC 6874.
+// Addresses without a zone pass through unchanged.
 func urlAuthority(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -199,10 +180,8 @@ func urlAuthority(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
-// URLAuthority is the exported form of urlAuthority, for callers outside this package that
-// build their own URLs from a dialable address — notably a discovered server's Address, which
-// carries an IPv6 zone verbatim from the OS. Embedding such an address in a URL without this
-// yields "invalid URL escape" (or, for a Windows zone, "invalid character in host name").
+// URLAuthority converts a dialable host:port to a URL authority, escaping
+// IPv6 zone identifiers, including those in discovery results.
 func URLAuthority(addr string) string { return urlAuthority(addr) }
 
 // escapeZoneID percent-encodes an IPv6 zone identifier per RFC 6874, which allows only

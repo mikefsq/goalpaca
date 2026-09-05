@@ -715,9 +715,6 @@ func TestControlListAndClear(t *testing.T) {
 	}
 }
 
-// The discovery responder answers an alpacadiscovery probe with the advertised
-// AlpacaPort and ignores anything else. Uses an ephemeral UDP port to avoid the
-// fixed 32227 (and any live responder sharing it).
 func TestAdvertiseResponder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -849,8 +846,6 @@ func TestLastSegment(t *testing.T) {
 	}
 }
 
-// A fault armed on a lowercase member still fires when the client uses a
-// different casing for the member path segment (Alpaca is case-insensitive).
 func TestMemberCaseInsensitive(t *testing.T) {
 	base := newTestProxy(t, jsonUpstream())
 	arm(t, base, "fault=fail&member=slewing")
@@ -866,8 +861,6 @@ func TestMemberCaseInsensitive(t *testing.T) {
 	}
 }
 
-// method= scopes a member fault to one verb; the other verb passes through, and
-// arming it never rescopes or is confused by an unrelated prior fault.
 func TestMethodScoping(t *testing.T) {
 	var puts atomic.Int32
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -905,7 +898,6 @@ func TestMethodScoping(t *testing.T) {
 	}
 }
 
-// A PUT-scoped fail fault returns the fault on PUT and passes GET through.
 func TestMethodScopedPutFails(t *testing.T) {
 	base := newTestProxy(t, jsonUpstream())
 	arm(t, base, "fault=fail&member=cooleron&method=PUT")
@@ -923,7 +915,6 @@ func TestMethodScopedPutFails(t *testing.T) {
 	}
 }
 
-// Member faults do not reach the management API even when the member name collides.
 func TestManagementExcluded(t *testing.T) {
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -949,8 +940,6 @@ func TestManagementExcluded(t *testing.T) {
 	}
 }
 
-// chaos supplies its jitter/loss defaults only where none were armed, so an
-// explicit lossy=0 keeps the resets off (jitter=0-0 keeps the test quick).
 func TestChaosRespectsExplicitZero(t *testing.T) {
 	base := newTestProxy(t, jsonUpstream())
 	arm(t, base, "fault=chaos")
@@ -968,9 +957,6 @@ func TestChaosRespectsExplicitZero(t *testing.T) {
 	}
 }
 
-// An explicit fault armed on imagearray is never clobbered by chaos's frame
-// drop. lossy=0/jitter=0-0 isolate the frame-drop dimension from chaos's
-// connection-level resets and delays.
 func TestChaosDefersToExplicitFault(t *testing.T) {
 	frame := make([]byte, 400)
 	for i := range frame {
@@ -990,8 +976,6 @@ func TestChaosDefersToExplicitFault(t *testing.T) {
 	}
 }
 
-// A JSON-family fault armed on the binary ImageBytes transport is a no-op, not a
-// corruption, and the frame is delivered intact.
 func TestContentFamilyMismatchNoOp(t *testing.T) {
 	frame := make([]byte, 100)
 	for i := range frame {
@@ -1005,7 +989,6 @@ func TestContentFamilyMismatchNoOp(t *testing.T) {
 	}
 }
 
-// A global toggle can be disarmed with value=off without a full clear.
 func TestGlobalDisarm(t *testing.T) {
 	var mu capturedForms
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1030,8 +1013,6 @@ func TestGlobalDisarm(t *testing.T) {
 	}
 }
 
-// partial-drop with value=100 still aborts the transfer rather than delivering a
-// clean full body.
 func TestPartialDropFull(t *testing.T) {
 	big := make([]byte, 4096)
 	base := newTestProxy(t, binaryUpstream(big))
