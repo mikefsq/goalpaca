@@ -64,6 +64,13 @@ func cameraGet(member string, c Camera, _ params) (any, bool, error) {
 	case "camerastate":
 		return int(c.CameraState()), true, nil
 	case "imageready":
+		// Optional asynchronous failure detail: otherwise polling clients can
+		// mistake a failed exposure for one that is still waiting for an image.
+		if failed, ok := c.(interface{ ExposureError() error }); ok {
+			if err := failed.ExposureError(); err != nil {
+				return false, true, err
+			}
+		}
 		return c.ImageReady(), true, nil
 	case "percentcompleted":
 		return c.PercentCompleted(), true, nil

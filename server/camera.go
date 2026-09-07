@@ -48,6 +48,8 @@ type Camera interface {
 	AbortExposure() error
 	CanStopExposure() bool
 	CanAbortExposure() bool
+	// A camera may additionally implement ExposureError() error to report an
+	// asynchronous failure in the ImageReady HTTP error envelope.
 	ImageReady() bool // completion
 	CameraState() CameraState
 	PercentCompleted() int
