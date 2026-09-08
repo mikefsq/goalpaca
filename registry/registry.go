@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -299,4 +300,68 @@ func All() []Driver {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// MultiBlock is one per-device block of a MultiKey entry, e.g. astrocam's "cameras".
+type MultiBlock struct {
+	// Index is the block's position: the device number a host registers it under,
+	// and the enumeration index a driver defaults its hardware binding to (Spec.Device).
+	Index int
+	// Raw is the block itself, host-owned keys included.
+	Raw json.RawMessage
+	// Name is the block's display-name override; "" when unset.
+	Name string
+	// Enable is the block's own flag; nil means unset, not false — the entry's flag still applies.
+	Enable *bool
+}
+
+// MultiBlocks splits a multi-device config entry into its per-device blocks.
+//
+// The split belongs to the driver contract — which key holds the blocks, and what a
+// block's position means — so two hosts reading one devices.d file agree about which
+// hardware it describes.
+//
+// What an absent or empty block list MEANS is left to the caller: a serving host may
+// default to empty slots for a setup page, while a discovery list must not invent
+// devices nobody declared.
+//
+// Returns ok=false when the entry is not multi-device: the driver is unregistered, has
+// no MultiKey, or carries flat driver keys instead of blocks.
+func MultiBlocks(driver string, raw json.RawMessage) (blocks []MultiBlock, ok bool, err error) {
+	drv, found := Lookup(driver)
+	if !found || drv.MultiKey == "" {
+		return nil, false, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, false, fmt.Errorf("registry: %s entry: %w", driver, err)
+	}
+	blocksRaw, has := m[drv.MultiKey]
+	if !has {
+		// Flat driver keys mean one device pinned without the array; nothing at all
+		// is an empty list and the caller's default.
+		for k := range m {
+			if !slices.ContainsFunc(commonKeys, func(c string) bool { return strings.EqualFold(c, k) }) {
+				return nil, false, nil
+			}
+		}
+		return nil, true, nil
+	}
+	var raws []json.RawMessage
+	if err := json.Unmarshal(blocksRaw, &raws); err != nil {
+		return nil, false, fmt.Errorf("registry: %s entry: %q: %w", driver, drv.MultiKey, err)
+	}
+	for i, r := range raws {
+		var b struct {
+			Name   string `json:"name"`
+			Enable *bool  `json:"enable"`
+		}
+		if err := json.Unmarshal(r, &b); err != nil {
+			return nil, false, fmt.Errorf("registry: %s entry: %s[%d]: %w", driver, drv.MultiKey, i, err)
+		}
+		blocks = append(blocks, MultiBlock{
+			Index: i, Raw: append(json.RawMessage(nil), r...), Name: b.Name, Enable: b.Enable,
+		})
+	}
+	return blocks, true, nil
 }
