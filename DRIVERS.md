@@ -127,6 +127,56 @@ overrides. A custom host attaches generated forms with `NewStructConfig` and
 for its own form definition. See [SETUP_FORMS.md](SETUP_FORMS.md) for tag syntax,
 form integration, and persistence.
 
+## Declare identity, and scan for devices
+
+A host that configures devices needs two things a config struct cannot express:
+which fields address one device uniquely, and whether the driver can find its
+hardware itself.
+
+`Identity` lists the config keys that pin a device, most stable first. A camera
+declares `{"serial", "index"}` because the factory serial survives a replug and
+the enumeration index does not; a networked mount declares `{"addr"}`.
+
+`Scan` lists what is attached now, so a host can offer devices to configure
+instead of asking for a serial number the operator has no way to know. Leave it
+nil when the driver cannot enumerate — the host then renders the config form for
+manual entry.
+
+```go
+registry.Register(registry.Driver{
+    Name:     "astrocam",
+    Identity: []string{"serial", "index"},
+    Scan:     scanCameras,
+    // ...
+})
+
+func scanCameras(ctx context.Context) ([]registry.Found, error) {
+    cams, err := astrocam.EnumerateWithSerials()
+    if err != nil {
+        return nil, err
+    }
+    out := make([]registry.Found, 0, len(cams))
+    for i, c := range cams {
+        out = append(out, registry.Found{
+            Label:  fmt.Sprintf("%s (serial %s)", c.Name, c.Serial),
+            Values: map[string]any{"serial": c.Serial, "index": i},
+        })
+    }
+    return out, nil
+}
+```
+
+`Found.Values` uses the driver's own config keys, so a host writes the entry and
+renders the form without knowing which driver it holds. Omit a key the scan
+could not read rather than setting it empty.
+
+A scan touches the bus, so it must not retain anything: open only what reading
+the identity requires and release it before returning. Report a device that is
+already in use with whatever was readable instead of omitting it — an operator
+looking for the camera they just connected needs to see it listed. Hosts call
+`Scan` from an operator's action and pin the result in a config entry, so the
+bus is walked once rather than polled.
+
 ## Build a standalone binary
 
 Add a command that imports the driver and calls `devicemain.Run`:

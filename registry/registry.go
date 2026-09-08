@@ -57,6 +57,50 @@ type Driver struct {
 	// Its json and alpaca tags define the generated setup form. A device's own
 	// server.Configurable implementation takes precedence.
 	Config func() any
+
+	// Scan lists the devices this driver can see attached to the machine now, so a host can
+	// offer them to configure instead of asking an operator for a serial number they have no
+	// way to know. Nil for a driver that cannot enumerate — a mount reached by address is
+	// typed in — and a host offers the Config form instead of a scan.
+	//
+	// A scan touches the bus, so what it may do is part of the contract:
+	//
+	//   - It must not retain anything. Open only what reading the identity requires, release
+	//     it before returning, and leave nothing claimed. A stuck USB claim outlives the
+	//     process on some platforms.
+	//   - It must not disturb a device already in use. A camera another process (or a
+	//     connected instance of this same driver) holds is reported with the values that were
+	//     readable and without the ones that would require taking it — not omitted, because an
+	//     operator looking for the camera they just connected needs to see it listed.
+	//   - It returns promptly and honours ctx. Hosts call this from a person's click, not from
+	//     a polling loop; the results are pinned into a config entry so the bus is walked once.
+	Scan func(ctx context.Context) ([]Found, error)
+
+	// Identity names the config keys that address one device uniquely, most stable first.
+	//
+	// A driver knows which of its fields are identity and which are preference; nothing else
+	// does. astrocam declares {"serial", "index"} — the factory serial survives a replug and
+	// the enumeration index does not — where a networked mount declares {"addr"}. A host uses
+	// the first key a scan filled to pin a device, and the order is what makes that choice
+	// right without the host knowing anything about the driver.
+	Identity []string
+}
+
+// Found is one device a Driver.Scan saw attached.
+//
+// Values are config-entry keys, not a fixed struct, because the identity of a device is
+// driver-specific: a serial for a USB camera, a port path for a serial focuser, a host:port for
+// a mount. Keying by the driver's own field names is what lets a host write the entry, and render
+// it in the Config form, without knowing which driver it is holding.
+type Found struct {
+	// Label names the device in a picker row: the product name and whatever distinguishes one
+	// unit from the next, e.g. "ASI6200MC Pro (serial 1a2b3c4d)".
+	Label string
+
+	// Values are the config keys this scan determined, ready to be written into a device entry.
+	// A key the scan could not read — a serial on a camera that is currently in use — is absent
+	// rather than empty, so a host can tell "not known" from "known to be blank".
+	Values map[string]any
 }
 
 // Spec is the driver-facing view of one device config entry.
@@ -75,6 +119,46 @@ type Spec struct {
 	// Device is the host-assigned device number, or zero when not yet known.
 	// A MultiKey expansion uses the block's array index.
 	Device int
+}
+
+// CheckIdentity reports whether a driver's Identity names keys its Config struct actually
+// declares.
+//
+// It exists because the two are wired together by STRING: Identity says "serial" and the struct
+// says `json:"serial,omitempty"`, and a rename on one side leaves a host pinning a key no driver
+// reads — a device that binds to nothing, discovered at connect time by an operator rather than at
+// build time by a test. Drivers call it from their own tests; a driver with no Identity or no
+// Config is not an error, only unchecked.
+func CheckIdentity(d Driver) error {
+	if len(d.Identity) == 0 || d.Config == nil {
+		return nil
+	}
+	cfg := d.Config()
+	if cfg == nil {
+		return fmt.Errorf("driver %s: Config() returned nil", d.Name)
+	}
+	t := reflect.TypeOf(cfg)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return fmt.Errorf("driver %s: Config() is %s, not a struct", d.Name, t.Kind())
+	}
+	have := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		name := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			name = t.Field(i).Name
+		}
+		have[strings.ToLower(name)] = true
+	}
+	for _, key := range d.Identity {
+		if !have[strings.ToLower(key)] {
+			return fmt.Errorf("driver %s: Identity names %q, which its config struct does not declare",
+				d.Name, key)
+		}
+	}
+	return nil
 }
 
 // commonKeys are the host-owned config entry keys, stripped by Decode before a

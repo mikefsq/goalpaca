@@ -155,3 +155,25 @@ func TestPackagePath(t *testing.T) {
 	// Main and does not panic. Its value depends on how the binary was built.
 	_ = d.ModuleVersion()
 }
+
+// Identity and the config struct are wired together by string, so a rename on one side must fail
+// a test rather than produce a device that pins a key no driver reads.
+func TestCheckIdentityCatchesAKeyTheConfigDoesNotDeclare(t *testing.T) {
+	type cfg struct {
+		Serial string `json:"serial,omitempty"`
+		Index  int    `json:"index,omitempty"`
+	}
+	good := Driver{Name: "d", Identity: []string{"serial", "index"}, Config: func() any { return &cfg{} }}
+	if err := CheckIdentity(good); err != nil {
+		t.Errorf("declared keys rejected: %v", err)
+	}
+	bad := Driver{Name: "d", Identity: []string{"serialnumber"}, Config: func() any { return &cfg{} }}
+	if err := CheckIdentity(bad); err == nil {
+		t.Error("a key the struct does not declare was accepted")
+	}
+	// A driver that declares neither is unchecked, not broken: most drivers have no identity to
+	// pin and are addressed by their entry alone.
+	if err := CheckIdentity(Driver{Name: "d"}); err != nil {
+		t.Errorf("a driver with no Identity should not be an error: %v", err)
+	}
+}
