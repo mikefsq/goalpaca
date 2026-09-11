@@ -438,28 +438,50 @@ func (s *Server) tmpl() *resolvedTemplates {
 }
 
 const defaultSetupCSS = `
-:root{color-scheme:light dark}
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
-h1{font-size:1.4rem;margin-bottom:.2rem}
-h2{font-size:1.1rem;margin-top:2rem}
-.sub{color:#888;margin-top:0}
-table{border-collapse:collapse;width:100%}
-td,th{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #8884}
-label{display:block;margin:1rem 0}
-label .lab{font-weight:600;display:block;margin-bottom:.25rem}
-input[type=text],input[type=number],input[type=password],select{width:100%;padding:.4rem;box-sizing:border-box;font-size:1rem}
-.help{color:#888;font-size:.85rem;margin-top:.2rem}
-.help.locked{color:#c9a227}
-.help.constraints{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem}
-label.locked .lab{color:#888}
-input:disabled,select:disabled{opacity:.6;cursor:not-allowed}
-.banner{padding:.6rem .8rem;border-radius:.4rem;margin:1rem 0}
-.banner.ok{background:#2e7d3222;border:1px solid #2e7d32}
-.banner.error{background:#c6282822;border:1px solid #c62828}
-.banner.warn{background:#f9a82522;border:1px solid #f9a825}
-button{font-size:1rem;padding:.5rem 1.2rem;margin-top:1rem;cursor:pointer}
-pre.result{background:#8881;padding:.6rem;border-radius:.4rem;white-space:pre-wrap;word-break:break-all}
-a{color:#4a9eff}
+:root{color-scheme:dark;--bg:#101318;--panel:#181d25;--input:#11161d;--line:#343e4c;--text:#e0e6ef;--muted:#a0adbe;--accent:#9bbcf4;--radius:.65rem}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text);max-width:52rem;margin:0 auto;padding:2.5rem 1.5rem 4rem;line-height:1.6;overflow-wrap:anywhere}
+h1,h2{line-height:1.25;color:var(--text)}
+h1{font-size:1.75rem;font-weight:650;letter-spacing:-.025em;margin:0 0 .65rem}
+h2{font-size:1.05rem;font-weight:650;margin:2.25rem 0 .9rem;padding-top:1.25rem;border-top:1px solid var(--line)}
+p{margin:.75rem 0 1rem}
+.sub{color:var(--muted);font-size:.9rem;margin-top:0}
+a{color:var(--accent);text-underline-offset:.2em;text-decoration-thickness:1px}
+a:hover{color:#c5d9fa}
+:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+code,pre,textarea{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+code{font-size:.875em;color:#becde0}
+form:not(.inline){background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem;margin:1rem 0}
+label{display:block;margin:0 0 1.25rem}
+label .lab{font-size:.9rem;font-weight:600;display:block;margin-bottom:.45rem}
+input,select,textarea,button{font:inherit}
+input[type=text],input[type=number],input[type=password],select,textarea{display:block;width:100%;min-height:2.75rem;padding:.6rem .75rem;border:1px solid #4a586b;border-radius:.4rem;background:var(--input);color:var(--text)}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
+input[type=checkbox]{width:1.25rem;height:1.25rem;accent-color:var(--accent);vertical-align:middle;margin:.35rem .35rem .35rem 0}
+label:has(input[type=checkbox]){min-height:2.75rem;cursor:pointer}
+textarea{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9rem;line-height:1.6;resize:vertical;tab-size:2}
+.help{display:block;color:var(--muted);font-size:.85rem;margin-top:.5rem;line-height:1.5}
+.help.locked{color:#c4b58f}
+.help.constraints{font-size:.8rem}
+label.locked .lab{color:var(--muted)}
+input:disabled,select:disabled{color:var(--muted);background:#1d232c;border-color:var(--line);cursor:not-allowed;opacity:1}
+button{min-height:2.75rem;padding:.55rem 1rem;border:1px solid #56729c;border-radius:.4rem;background:#293e5c;color:#e1ecff;font-size:.9rem;font-weight:600;cursor:pointer;line-height:1.4}
+button:hover{background:#354f73;border-color:var(--accent)}
+button:active{background:#21324b}
+button:disabled{opacity:.55;cursor:not-allowed}
+.banner{padding:1rem;border:1px solid var(--line);border-left-width:3px;border-radius:.4rem;margin:1rem 0;white-space:pre-wrap}
+.banner.ok{color:#b6d9c5;background:#192b24;border-color:#466e57}
+.banner.error{color:#efb9b6;background:#301f23;border-color:#945c61}
+.banner.warn{color:#e0c99c;background:#2b261c;border-color:#897343}
+.table-scroll{overflow-x:auto;scrollbar-color:#526078 var(--input);border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:.9rem;background:var(--panel)}
+td,th{text-align:left;padding:.85rem 1rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-size:.8rem;font-weight:600;background:#1e2530}
+tr:last-child td{border-bottom:0}
+td a{display:inline-block;min-height:2.75rem;padding:.55rem .25rem;margin-right:.35rem}
+pre.result{background:var(--input);border:1px solid var(--line);padding:1rem;border-radius:var(--radius);font-size:.85rem;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){body{padding:1.5rem 1rem 3rem}h1{font-size:1.5rem}h2{margin-top:1.75rem}form:not(.inline){padding:1rem}td,th{padding:.65rem .75rem}button{padding:.65rem 1rem}}
 `
 
 // formFields is the shared control-rendering fragment, defined once and used
@@ -480,7 +502,7 @@ const formFieldsTmpl = `{{define "fields"}}{{range .}}
 
 var (
 	defaultServerTmpl = template.Must(template.New("server").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).Parse(formFieldsTmpl + `<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.ServerName}} — Setup</title><style>{{css}}</style></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.ServerName}} — Setup</title><style>{{css}}</style></head>
 <body>
 <h1>{{.ServerName}}</h1>
 <p class="sub">{{with .Manufacturer}}{{.}}{{end}}{{with .ManufacturerVersion}} · {{.}}{{end}}{{with .Location}} · {{.}}{{end}}</p>
@@ -496,17 +518,19 @@ var (
 {{end}}
 <h2>Devices</h2>
 {{if .Devices}}
+<div class="table-scroll" role="region" aria-label="Devices" tabindex="0">
 <table>
 <tr><th>Name</th><th>Type</th><th>#</th><th></th></tr>
 {{range .Devices}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Number}}</td><td><a href="{{.URL}}">Configure →</a></td></tr>
 {{end}}
 </table>
+</div>
 {{else}}<p>No devices are configured.</p>{{end}}
 {{if .Pages}}<h2>More</h2><ul>{{range .Pages}}<li><a href="{{.URL}}">{{.Name}}</a></li>{{end}}</ul>{{end}}
 </body></html>`))
 
 	defaultDeviceTmpl = template.Must(template.New("device").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).Parse(formFieldsTmpl + `<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Title}} — Setup</title><style>{{css}}</style></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} — Setup</title><style>{{css}}</style></head>
 <body>
 <p><a href="{{.BackURL}}">← All devices</a></p>
 <h1>{{.Title}}</h1>
@@ -543,7 +567,7 @@ var (
 </body></html>`))
 
 	defaultErrorTmpl = template.Must(template.New("err").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Setup error</title><style>{{css}}</style></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Setup error</title><style>{{css}}</style></head>
 <body><h1>Setup</h1><div class="banner error">{{.}}</div><p><a href="/setup">← Back</a></p></body></html>`))
 )
 

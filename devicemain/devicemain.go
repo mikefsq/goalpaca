@@ -14,6 +14,7 @@ package devicemain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -67,11 +68,19 @@ type Options struct {
 	AfterRegister func(ctx context.Context, dev func() server.Device, entry map[string]json.RawMessage) error
 }
 
-// Run serves a registered driver until shutdown and exits with status 1 on error.
-// Use RunWith to receive the error without exiting.
+// exitConfig is EX_CONFIG. The alpacahurd device unit carries
+// RestartPreventExitStatus=78, so exiting with it stops a supervisor retrying a
+// fault that no retry can fix.
+const exitConfig = 78
+
+// Run serves a registered driver until shutdown. It exits 78 on a configuration
+// fault and 1 on any other error. Use RunWith to receive the error without exiting.
 func Run(driverName string) {
 	if err := RunWith(driverName, Options{}); err != nil {
 		fmt.Fprintln(os.Stderr, driverName+": "+err.Error())
+		if errors.Is(err, syscall.EADDRINUSE) {
+			os.Exit(exitConfig)
+		}
 		os.Exit(1)
 	}
 }
@@ -101,6 +110,7 @@ func RunWith(driverName string, opt Options) error {
 	configPath := fs.String("config", "", "device file (JSON with // comments); flags override its keys")
 	port := fs.Int("port", 0, "Alpaca HTTP port (default: the file's, else "+strconv.Itoa(opt.DefaultPort)+")")
 	name := fs.String("name", "", "device display name")
+	discover := fs.Bool("discover", false, "list detected hardware as JSON and exit (does not start a server)")
 	discovery := fs.String("discovery", "direct",
 		"discovery mode: direct (answer UDP 32227), register (heartbeat to a proxy or orchestrator, which answers for this device; binds no socket), off")
 	discoveryServer := fs.String("discovery-server", "localhost:32227", "proxy or orchestrator address for register mode")
@@ -136,6 +146,9 @@ func RunWith(driverName string, opt Options) error {
 	}
 	if err := fs.Parse(opt.Args); err != nil {
 		return err
+	}
+	if *discover {
+		return Discover(opt.Context, drv, opt.Stdout)
 	}
 	if opt.BeforeRun != nil {
 		if done, err := opt.BeforeRun(); done {

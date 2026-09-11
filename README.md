@@ -98,6 +98,16 @@ working implementations without hardware.
 extension; see [discovery relay setup](DISCOVERY_RELAY.md). `cmd/fault_proxy` injects faults for testing client recovery; see its
 [usage guide](cmd/fault_proxy/README.md).
 
+Standalone drivers using `devicemain` accept `-discover` to scan attached hardware
+and print JSON before configuration loading or device construction. The response
+contains `driver`, `supported`, `identity` keys in preference order, and `devices`
+with `label` and configuration `values`. Unsupported scanners return
+`supported: false`; a supported scan with no matches returns an empty array.
+Scan errors appear in JSON and cause a nonzero exit. Scanners receive a ten-second
+context deadline and must leave devices already in use undisturbed. Custom
+launchers can call `devicemain.Discover` for the same output contract.
+This hardware scan is separate from `-discovery` and `client` network discovery.
+
 ## Tests
 
 ```sh
