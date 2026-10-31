@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -157,6 +158,7 @@ type serverSetupView struct {
 	Port                int
 	ConfigPath          string
 	Devices             []deviceLink
+	HubURL              string // the managing host's setup page, or ""
 
 	// Server-level form, present when Config.Setup is set.
 	Configurable bool
@@ -192,6 +194,7 @@ func (s *Server) renderServerSetup(w http.ResponseWriter, r *http.Request) {
 		Port:                s.Port(),
 		ConfigPath:          s.cfg.ConfigPath,
 		Devices:             links,
+		HubURL:              s.hubURL(r),
 	}
 	if cfg := s.cfg.Setup; cfg != nil {
 		view.Configurable = true
@@ -229,6 +232,7 @@ type deviceSetupView struct {
 	Banner       string
 	BannerKind   string // "ok" | "error" | "warn"
 	BackURL      string
+	HubURL       string // the managing host's setup page, or ""
 
 	// Actions console: every device has SupportedActions and Action, so the
 	// console is present on every device page. Result holds the last reply.
@@ -250,6 +254,7 @@ func (s *Server) renderDeviceSetup(w http.ResponseWriter, r *http.Request, devTy
 		Title:       fmt.Sprintf("%s (%s #%d)", dev.Name(), devType, number),
 		Description: dev.Description(),
 		BackURL:     "/setup",
+		HubURL:      s.hubURL(r),
 		Actions:     dev.SupportedActions(),
 		Reloadable:  s.reloadable(rd),
 	}
@@ -372,6 +377,26 @@ func (s *Server) setupError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = s.tmpl().errPage.Execute(w, msg)
+}
+
+// hubURL is the managing host's setup page on the host name the browser used, or "" when
+// no host manages this server.
+func (s *Server) hubURL(r *http.Request) string {
+	port := 0
+	if s.cfg.HubPort != nil {
+		port = s.cfg.HubPort()
+	}
+	if port <= 0 || port > 65535 || port == s.Port() {
+		return ""
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/setup"
 }
 
 func orDefault(v, def string) string {
@@ -504,6 +529,7 @@ var (
 	defaultServerTmpl = template.Must(template.New("server").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).Parse(formFieldsTmpl + `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.ServerName}} — Setup</title><style>{{css}}</style></head>
 <body>
+{{with .HubURL}}<p><a href="{{.}}">← alpacahurd</a></p>{{end}}
 <h1>{{.ServerName}}</h1>
 <p class="sub">{{with .Manufacturer}}{{.}}{{end}}{{with .ManufacturerVersion}} · {{.}}{{end}}{{with .Location}} · {{.}}{{end}}</p>
 <p>This Alpaca server is listening on port <strong>{{.Port}}</strong>.</p>
@@ -532,7 +558,7 @@ var (
 	defaultDeviceTmpl = template.Must(template.New("device").Funcs(template.FuncMap{"css": func() template.CSS { return "" }}).Parse(formFieldsTmpl + `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} — Setup</title><style>{{css}}</style></head>
 <body>
-<p><a href="{{.BackURL}}">← All devices</a></p>
+<p><a href="{{.BackURL}}">← All devices</a>{{with .HubURL}} · <a href="{{.}}">alpacahurd</a>{{end}}</p>
 <h1>{{.Title}}</h1>
 {{with .Description}}<p class="sub">{{.}}</p>{{end}}
 {{with .Banner}}<div class="banner {{$.BannerKind}}">{{.}}</div>{{end}}

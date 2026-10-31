@@ -138,6 +138,12 @@ type Config struct {
 	// the server page at /setup.
 	SetupHome http.Handler
 
+	// HubPort returns the port of the setup page of the host that manages this
+	// server, such as alpacahurd's device list. The setup pages then link back to
+	// it, on the host name the browser used. Nil or 0 means no link. devicemain
+	// sets it from its -hurd-port flag, 32227 by default.
+	HubPort func() int
+
 	// SetupLinks adds links to pages served elsewhere, listed on /setup beside
 	// SetupPages: an orchestrator's page on its own port, say. Keys are the link
 	// text; values are absolute URLs.

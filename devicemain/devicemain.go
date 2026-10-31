@@ -115,6 +115,7 @@ func RunWith(driverName string, opt Options) error {
 		"discovery mode: direct (answer UDP 32227), register (heartbeat to a proxy or orchestrator, which answers for this device; binds no socket), off")
 	discoveryServer := fs.String("discovery-server", "localhost:32227", "proxy or orchestrator address for register mode")
 	ipv6 := fs.Bool("ipv6", false, "also answer IPv6 multicast discovery (direct mode)")
+	hurdPort := fs.Int("hurd-port", 32227, "port of the alpacahurd setup page the setup pages link back to; 0 for no link")
 	check := fs.Bool("check", false, "load the config, construct the device without touching hardware, report, and exit")
 	schema := fs.String("schema", "", "print the driver's config schema and exit: json, or commented (a device file with every key commented at its default)")
 	quiet := fs.Bool("quiet", false, "no per-request log lines")
@@ -310,6 +311,7 @@ func RunWith(driverName string, opt Options) error {
 		Logger:              reqLog,
 		ConfigPath:          *configPath,
 		Settings:            server.NewFileStore(),
+		HubPort:             func() int { return *hurdPort },
 	})
 	if err := srv.Register(drv.Type, 0, dev); err != nil {
 		return err

@@ -225,3 +225,19 @@ func TestSetupServerPageRejectsPost(t *testing.T) {
 		t.Errorf("POST /setup status = %d, want 405", w.Code)
 	}
 }
+
+func TestSetupHubLink(t *testing.T) {
+	r := httptest.NewRequest("GET", "http://example.local:11303/setup", nil)
+	s := New(Config{HubPort: func() int { return 32228 }})
+	if got := s.hubURL(r); got != "http://example.local:32228/setup" {
+		t.Fatal(got)
+	}
+	s = New(Config{HubPort: func() int { return 0 }})
+	if got := s.hubURL(r); got != "" {
+		t.Fatal(got)
+	}
+	s = New(Config{})
+	if got := s.hubURL(r); got != "" {
+		t.Fatal(got)
+	}
+}
