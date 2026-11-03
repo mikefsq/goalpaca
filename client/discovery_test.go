@@ -135,3 +135,29 @@ func TestConfiguredDevicesContextCancel(t *testing.T) {
 		t.Errorf("took %v; want prompt return on cancel", elapsed)
 	}
 }
+
+// Cancellation must remain effective when the listen timeout is installed afterward.
+func TestCanceledDiscoverySocketCannotBeRearmed(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer cancelReads(ctx, conn)()
+	cancel()
+	// Wait for the cancellation hook to unblock the socket before readResponses resets its deadline.
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, _, err = conn.ReadFromUDP(make([]byte, 1))
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("cancellation did not close discovery socket: %v", err)
+	}
+	start := time.Now()
+	if got := readResponses(conn, time.Second); len(got) != 0 {
+		t.Fatalf("responses on canceled socket: %v", got)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("cancellation lost after timeout reset: %v", elapsed)
+	}
+}

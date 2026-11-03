@@ -2,71 +2,72 @@
 
 A driver implements one of the typed interfaces in `server`, such as
 `server.Focuser` or `server.Camera`. The server supplies HTTP encoding,
-discovery, setup pages, and common protocol validation. Your driver supplies
-hardware behavior, capability reporting, and hardware-specific limits.
+discovery, setup pages and common protocol validation. The driver supplies
+hardware behavior, capability reporting and hardware-specific limits.
 
-For client applications and simulators, see [README.md](README.md).
+[README.md](README.md) covers client applications and simulators.
 
-## Implement the device
+## Implementing the device
 
-Embed the matching base type, such as `server.BaseFocuser`, and override the
-methods your hardware supports. Base types provide identity, logical connection
-state, and defaults for unsupported operations.
+A device embeds the matching base type, such as `server.BaseFocuser`, and
+overrides the methods its hardware supports. The base types provide identity,
+logical connection state and defaults for unsupported operations.
 
-Set `ID`, `DevName`, `Desc`, `Info`, `Version`, and `IfaceVer` in the constructor.
-Use a stable device ID and advertise the interface version your driver implements.
-The current version constants are in [platform7.go](server/platform7.go).
-Copy `registry.Spec.Instance` into `BaseDevice.Instance` so `Label()` identifies
-the device consistently in host and driver logs.
+The constructor sets `ID`, `DevName`, `Desc`, `Info`, `Version` and `IfaceVer`.
+`ID` is a stable device ID, and `IfaceVer` is the interface version the driver
+implements. The current version constants are in [platform7.go](server/platform7.go).
+The constructor also copies `registry.Spec.Instance` into `BaseDevice.Instance`,
+so `Label()` names the device the same way in host and driver logs.
 
-See the [focuser example](server/example_test.go) for direct hosting and
-[sim/focuser.go](sim/focuser.go) for a complete simulated device. Add a compile-time
-interface assertion to your implementation:
+The [focuser example](server/example_test.go) shows direct hosting, and
+[sim/focuser.go](sim/focuser.go) is a complete simulated device. A compile-time
+assertion confirms the implementation:
 
 ```go
 var _ server.Focuser = (*Device)(nil)
 ```
 
-Return Alpaca errors for unsupported operations, invalid values, and device
-state errors. `server.ErrNotImplemented`, `server.ErrInvalidValue`, and
-`server.InvalidOperationError` cover common cases. Capability flags must agree
-with the operations the device actually supports.
+Unsupported operations, invalid values and device state errors return Alpaca
+errors. `server.ErrNotImplemented`, `server.ErrInvalidValue` and
+`server.InvalidOperationError` cover the common cases. Capability flags agree
+with the operations the device supports.
 
-## Own the hardware lifecycle
+## Hardware lifecycle
 
-Implement `server.Hardware` to acquire and release hardware:
+The device implements `server.Hardware` to acquire and release hardware:
 
-- Keep constructors free of hardware access. Hosts use them for config checks
-  and to prepare replacements before reload.
+- The constructor does not touch hardware. Hosts call it for config checks and
+  to prepare a replacement before a reload.
 - `Open(ctx)` starts hardware access. Its context lasts until the device closes.
 - `Close(ctx)` stops workers and releases handles. It runs on shutdown,
-  unregistration, and reload.
-- Keep logical Alpaca `Connect` and `Disconnect` separate from hardware ownership.
-  The base type's connection flag is shared device state, not a per-client map.
+  unregistration and reload.
+- Alpaca `Connect` and `Disconnect` stay separate from hardware ownership. The
+  base type's connection flag is shared device state, with no per-client map.
 
-The server cancels the Open context before calling Close. Wait for workers to
-stop before releasing hardware so they cannot reacquire it during reload.
-`server.RunLoop` supplies supervision and a cancellation/wait function; its
-wait can time out, so workers still need to honor cancellation. Open failures
-are logged and leave the device registered. Implement recovery in the driver,
-or require a reload to retry.
+The server cancels the Open context before calling Close. Workers stop before
+the hardware is released, so they cannot reacquire it during a reload.
+`server.RunLoop` supplies supervision and a function that cancels and waits.
+That wait can time out, so workers still honor cancellation. An Open failure is
+logged and leaves the device registered. Recovery is the driver's job, or a
+reload retries.
 
-HTTP requests can call methods concurrently. Protect shared state and serialize
-hardware operations where required. `server.Busyable` rejects ordinary writes
-while busy, but drivers must guard operation starts atomically: two requests
-can pass the HTTP busy check together. `server.Op.TryBegin` provides that guard;
-use Complete or Fail to finish the operation and expose the appropriate status.
-Interrupt operations must remain available while busy.
+HTTP requests can call methods concurrently. Shared state needs protecting, and
+hardware operations need serializing where the hardware requires it.
+`server.Busyable` rejects ordinary writes while the device is busy. Two requests
+can still pass that check together, so the driver guards each operation start
+atomically. `server.Op.TryBegin` provides that guard, and `Complete` or `Fail`
+finishes the operation and sets its status. Interrupt operations stay available
+while the device is busy.
 
 The HTTP server applies the exported `Gate*` validation functions automatically.
-Hosts calling drivers directly must apply the matching gates before calling
-methods, particularly ID-taking switch methods. Drivers still enforce hardware
-limits and synchronization.
+A host calling a driver directly applies the matching gates first, particularly
+before ID-taking switch methods. The driver still enforces hardware limits and
+synchronization.
 
-## Register the driver
+## Registration
 
-A reusable driver package registers itself from `init`. Hosts include it with
-a blank import; standalone and bundled hosts use the same constructor.
+A reusable driver package registers itself from `init`. A host includes it with
+a blank import, and standalone and bundled hosts use the same constructor.
 
 ```go
 func init() {
@@ -87,25 +88,26 @@ func init() {
 }
 ```
 
-Here `Config` and `New` are your driver's types and constructor. Validate
-configuration in New without connecting to hardware. Honor `spec.Name` when it
-is set. `spec.Device` contains the host's assigned device number when known.
+`Config` and `New` here are the driver's own types and constructor. `New`
+validates the configuration without connecting to hardware and applies
+`spec.Name` when it is set. `spec.Device` holds the host's assigned device
+number when it is known.
 
-`Spec.Decode` removes host-owned keys and rejects unknown driver fields. Do not
-reuse names returned by `registry.CommonKeys`, including `driver`, `name`,
-`port`, and `device`. `ConfigExample` must be valid JSON and omit `port`, which
-the host assigns.
+`Spec.Decode` removes host-owned keys and rejects unknown driver fields. A
+driver's config keys avoid the names in `registry.CommonKeys`, which include
+`driver`, `name`, `port` and `device`. `ConfigExample` is valid JSON and omits
+`port`, which the host assigns.
 
-For drivers exposing multiple devices from one entry, `MultiKey` names the array
-that supporting hosts expand into individual specs. `FrontEnd` can start an
-additional protocol service. It must return promptly, follow its context, and
-resolve the supplied device function on each use because reload can replace the
-device. See [registry.Driver](registry/registry.go) for the full contracts.
+`MultiKey` names an array of devices in one entry, which supporting hosts
+expand into individual specs. `FrontEnd` starts an additional protocol service.
+It returns promptly and follows its context. It resolves the supplied device
+function on each use, because a reload can replace the device.
+[registry.Driver](registry/registry.go) documents the full contracts.
 
 ## Configuration and setup forms
 
-Return a pointer to a zero-valued config struct from `Driver.Config`. Use `json`
-tags for field names and `alpaca` tags for form metadata:
+`Driver.Config` returns a pointer to a zero-valued config struct. The `json`
+tags name the fields, and the `alpaca` tags carry the form metadata:
 
 ```go
 type Config struct {
@@ -114,32 +116,33 @@ type Config struct {
 }
 ```
 
-Tags support labels, help text, numeric bounds, select options, secret fields,
-and start-only settings. See [SettingTag](server/settingtag.go) for syntax.
-Implement `server.Reconfigurable` to receive live changes as a fresh config
-struct. Validate before applying and synchronize with normal device operations.
-Without Reconfigurable, generated forms are read-only; `when=start` fields are
-always read-only and must be changed in the config file.
+The tags support labels, help text, numeric bounds, select options, secret
+fields and start-only settings. [SettingTag](server/settingtag.go) defines the
+syntax. A device that implements `server.Reconfigurable` receives live changes
+as a fresh config struct. It validates the struct before applying it, and
+synchronizes with normal device operations. Without Reconfigurable, the
+generated form is read-only. A `when=start` field is always read-only and
+changes only in the config file.
 
 Hosts apply settings in this order: defaults, persisted values, then pinned host
-overrides. A custom host attaches generated forms with `NewStructConfig` and
+overrides. A custom host attaches a generated form with `NewStructConfig` and
 `RegisterConfigurable`. A device can instead implement `server.Configurable`
-for its own form definition. See [SETUP_FORMS.md](SETUP_FORMS.md) for tag syntax,
-form integration, and persistence.
+for its own form. [SETUP_FORMS.md](SETUP_FORMS.md) covers tag syntax, form
+integration and persistence.
 
-## Declare identity, and scan for devices
+## Identity and scanning
 
-A host that configures devices needs two things a config struct cannot express:
+A host that configures devices needs two facts a config struct cannot express:
 which fields address one device uniquely, and whether the driver can find its
 hardware itself.
 
 `Identity` lists the config keys that pin a device, most stable first. A camera
-declares `{"serial", "index"}` because the factory serial survives a replug and
-the enumeration index does not; a networked mount declares `{"addr"}`.
+declares `{"serial", "index"}`, since the factory serial survives a replug and
+the enumeration index does not. A networked mount declares `{"addr"}`.
 
-`Scan` lists what is attached now, so a host can offer devices to configure
-instead of asking for a serial number the operator has no way to know. Leave it
-nil when the driver cannot enumerate — the host then renders the config form for
+`Scan` lists the devices attached now, so a host can offer them to configure.
+An operator then never has to know a serial number in advance. `Scan` stays nil
+for a driver that cannot enumerate, and the host shows the config form for
 manual entry.
 
 ```go
@@ -167,19 +170,19 @@ func scanCameras(ctx context.Context) ([]registry.Found, error) {
 ```
 
 `Found.Values` uses the driver's own config keys, so a host writes the entry and
-renders the form without knowing which driver it holds. Omit a key the scan
-could not read rather than setting it empty.
+renders the form without knowing which driver it holds. A key the scan could not
+read is omitted, never set empty.
 
-A scan touches the bus, so it must not retain anything: open only what reading
-the identity requires and release it before returning. Report a device that is
-already in use with whatever was readable instead of omitting it — an operator
-looking for the camera they just connected needs to see it listed. Hosts call
-`Scan` from an operator's action and pin the result in a config entry, so the
-bus is walked once rather than polled.
+A scan touches the bus, so it retains nothing. It opens only what reading the
+identity requires and releases it before returning. A device already in use is
+still listed, with whatever was readable, because an operator looking for a
+camera that was just connected needs to see it. Hosts call `Scan` from an
+operator's action and pin the result in a config entry, so the bus is walked
+once and never polled.
 
-## Build a standalone binary
+## Standalone binary
 
-Add a command that imports the driver and calls `devicemain.Run`:
+A command imports the driver and calls `devicemain.Run`:
 
 ```go
 package main
@@ -192,31 +195,35 @@ import (
 func main() { devicemain.Run("myfocuser") }
 ```
 
-The command supplies `-config`, `-port`, `-check`, `-schema`, discovery options,
-and flags derived from the config struct. Use `-h` for the full list.
-Device files accept JSONC (`//` and `/* */` comments), without trailing commas.
-Explicit flags override file values. `registry.Spec.Decode` itself expects JSON;
-custom hosts must strip comments before constructing specs.
+The command supplies `-config`, `-port`, `-check`, `-schema`, `-discover`, the
+`-discovery` options, `-hurd-port`, and flags derived from the config struct.
+`-h` lists them all. Device files accept JSONC with `//` and `/* */` comments,
+without trailing commas. Explicit flags override file values.
+`registry.Spec.Decode` itself expects JSON, so a custom host strips comments
+before constructing specs.
 
 `-check` validates and constructs the device without opening hardware.
-`-schema commented` prints a commented starter entry. Setup changes are stored
-under the driver's state directory when the run has a named config-file instance.
-`ALPACA_STATE_DIR` overrides that directory; platform defaults are resolved by
-[server.StateDir](server/dirs.go).
+`-schema commented` prints a commented starter entry. `-discover` prints the
+`Scan` results as JSON. Setup changes are stored under the driver's state
+directory when the run has a named config-file instance. `ALPACA_STATE_DIR`
+overrides that directory, and [server.StateDir](server/dirs.go) resolves the
+platform defaults.
 
-To include the package in alpacahurd, follow its driver import and configuration
-instructions. No separate hardware implementation is needed.
+alpacahurd includes a driver package through its own import list and
+configuration. The driver needs no separate hardware implementation for it.
 
-## Test the driver
+## Testing
 
-Test config validation without hardware, then test the typed device methods
-with a fake transport or SDK. Cover concurrent starts, cancellation, disconnects,
-and cleanup during reload. For protocol tests, register the device with a server
-and drive it through the typed client; see [server tests](server/server_test.go).
+Config validation is tested without hardware, and the typed device methods
+with a fake transport or SDK. The tests cover concurrent starts, cancellation,
+disconnects and cleanup during a reload. Protocol tests register the device with
+a server and drive it through the typed client, as the
+[server tests](server/server_test.go) do.
 
-Run `go test ./...` and `go test -race ./...` in the driver module.
-The `conformance.Check*` functions exercise protocol and device behavior through
-typed clients. Several checks assume simulator-specific values and capabilities; adapt them
-before testing hardware. They can move devices and change settings. Increase `conformance.SettleTimeout` for slower hardware.
-Passing these checks does not replace testing with the intended clients and
-ConformU against the actual driver.
+`go test ./...` and `go test -race ./...` run in the driver module. The
+`conformance.Check*` functions exercise protocol and device behavior through
+typed clients. Several checks assume simulator values and capabilities, so they
+need adapting before a hardware test. They can move devices and change settings.
+`conformance.SettleTimeout` needs raising for slower hardware. Passing these
+checks does not replace testing with the intended clients and with ConformU
+against the actual driver.

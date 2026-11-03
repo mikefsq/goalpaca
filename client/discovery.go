@@ -93,11 +93,11 @@ func DiscoverContext(ctx context.Context, timeout time.Duration) ([]DiscoveredSe
 	return out, nil
 }
 
-// cancelReads arranges for a ctx cancellation to unblock reads on conn by
-// expiring its read deadline; returns a stop func for the caller to defer.
+// cancelReads closes the discovery-owned socket on cancellation. Closing cannot
+// be undone when readResponses sets its timeout after cancellation.
 func cancelReads(ctx context.Context, conn *net.UDPConn) func() bool {
 	return context.AfterFunc(ctx, func() {
-		_ = conn.SetReadDeadline(time.Now())
+		_ = conn.Close()
 	})
 }
 
