@@ -117,13 +117,16 @@ func cameraStateValues(c Camera) []StateValue {
 }
 
 func coverCalibratorStateValues(cc CoverCalibrator) []StateValue {
-	return []StateValue{
-		{Name: "Brightness", Value: cc.Brightness()},
+	sv := []StateValue{
 		{Name: "CalibratorState", Value: int(cc.CalibratorState())},
 		{Name: "CoverState", Value: int(cc.CoverState())},
 		{Name: "CalibratorChanging", Value: cc.CalibratorChanging()},
 		{Name: "CoverMoving", Value: cc.CoverMoving()},
 	}
+	if cc.CalibratorState() != CalibratorNotPresent {
+		sv = append(sv, StateValue{Name: "Brightness", Value: cc.Brightness()})
+	}
+	return sv
 }
 
 func domeStateValues(d Dome) []StateValue {

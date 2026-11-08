@@ -40,12 +40,18 @@ func (b *BaseCoverCalibrator) OpenCover() error                  { return ErrNot
 func coverCalibratorGet(member string, cc CoverCalibrator, _ params) (any, bool, error) {
 	switch member {
 	case "brightness":
+		if err := GateCoverCalibratorCalibrator(cc, "Brightness"); err != nil {
+			return nil, true, err
+		}
 		return cc.Brightness(), true, nil
 	case "calibratorstate":
 		return int(cc.CalibratorState()), true, nil
 	case "coverstate":
 		return int(cc.CoverState()), true, nil
 	case "maxbrightness":
+		if err := GateCoverCalibratorCalibrator(cc, "MaxBrightness"); err != nil {
+			return nil, true, err
+		}
 		return cc.MaxBrightness(), true, nil
 	case "calibratorchanging":
 		return cc.CalibratorChanging(), true, nil
