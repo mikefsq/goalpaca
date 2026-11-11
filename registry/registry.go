@@ -77,6 +77,11 @@ type Driver struct {
 	//     a polling loop; the results are pinned into a config entry so the bus is walked once.
 	Scan func(ctx context.Context) ([]Found, error)
 
+	// Extra lists further device types served from the same entry, beside the primary
+	// Type (see Kind). Nil for a driver of one type. Each Extra kind needs its own Type,
+	// different from the primary's and every other kind's, a New and a MultiKey.
+	Extra []Kind
+
 	// Identity names the config keys that address one device uniquely, most stable first.
 	//
 	// A driver knows which of its fields are identity and which are preference; nothing else
@@ -187,7 +192,13 @@ func (s Spec) Decode(v any) error {
 	if err := json.Unmarshal(s.Raw, &m); err != nil {
 		return fmt.Errorf("device entry: %w", err)
 	}
+	// An entry's Extra kind arrays belong to those kinds, not to this one's strict decode.
+	drv, _ := Lookup(s.Driver)
 	for k := range m {
+		if drv.extraKey(k) {
+			delete(m, k)
+			continue
+		}
 		for _, c := range commonKeys {
 			if strings.EqualFold(k, c) {
 				delete(m, k)
@@ -221,6 +232,16 @@ func Register(d Driver) {
 	}
 	if d.New == nil {
 		panic("registry: Register " + d.Name + " with nil New")
+	}
+	seen := map[server.DeviceType]bool{d.Type: true}
+	for _, k := range d.Extra {
+		if k.New == nil || k.MultiKey == "" {
+			panic("registry: Register " + d.Name + ": extra kind " + string(k.Type) + " needs New and MultiKey")
+		}
+		if seen[k.Type] {
+			panic("registry: Register " + d.Name + ": device type " + string(k.Type) + " served twice")
+		}
+		seen[k.Type] = true
 	}
 	key := strings.ToLower(d.Name)
 	mu.Lock()
@@ -341,6 +362,9 @@ func MultiBlocks(driver string, raw json.RawMessage) (blocks []MultiBlock, ok bo
 		// Flat driver keys mean one device pinned without the array; nothing at all
 		// is an empty list and the caller's default.
 		for k := range m {
+			if drv.extraKey(k) {
+				continue
+			}
 			if !slices.ContainsFunc(commonKeys, func(c string) bool { return strings.EqualFold(c, k) }) {
 				return nil, false, nil
 			}

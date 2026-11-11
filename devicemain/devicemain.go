@@ -266,7 +266,64 @@ func RunWith(driverName string, opt Options) error {
 		return entry, dev, sc, nil
 	}
 
+	// extraUnits lists the enabled blocks of the driver's Extra kinds in entry: the
+	// further device types this one process serves beside the primary (see registry.Kind).
+	type extraUnit struct {
+		kind registry.Kind
+		blk  registry.MultiBlock
+	}
+	extraUnits := func(entry map[string]json.RawMessage) ([]extraUnit, error) {
+		var out []extraUnit
+		for _, k := range drv.Extra {
+			blocks, err := registry.ExtraBlocks(drv, k, mustJSON(entry))
+			if err != nil {
+				return nil, err
+			}
+			for _, b := range blocks {
+				if b.Enable == nil || *b.Enable {
+					out = append(out, extraUnit{k, b})
+				}
+			}
+		}
+		return out, nil
+	}
+	// newExtra builds one Extra-kind device, numbered by its block position, plus its
+	// generated setup form as construct does for the primary.
+	newExtra := func(u extraUnit) (server.Device, server.Configurable, error) {
+		dev, err := u.kind.New(registry.Spec{Driver: drv.Name, Name: u.blk.Name, Instance: instance, Raw: u.blk.Raw, Device: u.blk.Index})
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s %d: %w", u.kind.Type, u.blk.Index, err)
+		}
+		if u.kind.Config == nil {
+			return dev, nil, nil
+		}
+		if _, own := dev.(server.Configurable); own {
+			return dev, nil, nil
+		}
+		var keys map[string]json.RawMessage
+		_ = json.Unmarshal(u.blk.Raw, &keys)
+		pinned := map[string]bool{}
+		for k := range keys {
+			if !isCommonKey(k) {
+				pinned[k] = true
+			}
+		}
+		source := "flags"
+		if *configPath != "" {
+			source = *configPath
+		}
+		sc, err := server.NewStructConfig(dev, u.kind.Config, u.blk.Raw, pinned, "set in "+source)
+		if err != nil {
+			return nil, nil, err
+		}
+		return dev, sc, nil
+	}
+
 	entry, dev, sc, err := construct()
+	if err != nil {
+		return err
+	}
+	extras, err := extraUnits(entry)
 	if err != nil {
 		return err
 	}
@@ -274,6 +331,13 @@ func RunWith(driverName string, opt Options) error {
 	_ = json.Unmarshal(entry["port"], &portNum)
 	if *check {
 		fmt.Fprintf(opt.Stdout, "ok     %-22s %s/0 on port %d  %q\n", drv.Name, drv.Type, portNum, dev.Name())
+		for _, u := range extras {
+			xdev, _, err := newExtra(u)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(opt.Stdout, "ok     %-22s %s/%d on port %d  %q\n", drv.Name, u.kind.Type, u.blk.Index, portNum, xdev.Name())
+		}
 		return nil
 	}
 
@@ -349,6 +413,30 @@ func RunWith(driverName string, opt Options) error {
 	if p := deviceStatePath(drv.Name, instance); p != "" {
 		_ = srv.SettingsPath(drv.Type, 0, p)
 	}
+	for _, u := range extras {
+		if err := registerExtra(srv, drv, instance, u.kind, u.blk.Index, func() (server.Device, server.Configurable, error) {
+			return newExtra(u)
+		}, func() (server.Device, server.Configurable, error) {
+			// A reload reads the file again and rebuilds the same kind and block.
+			entry, _, err := assemble()
+			if err != nil {
+				return nil, nil, err
+			}
+			units, err := extraUnits(entry)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, n := range units {
+				if n.kind.Type == u.kind.Type && n.blk.Index == u.blk.Index {
+					return newExtra(n)
+				}
+			}
+			return nil, nil, fmt.Errorf("%s %d is no longer in the device file; restart to drop it", u.kind.Type, u.blk.Index)
+		}); err != nil {
+			return err
+		}
+		logger.Printf("also serving %s %d", u.kind.Type, u.blk.Index)
+	}
 
 	ctx := opt.Context
 	if ctx == nil {
@@ -378,6 +466,36 @@ func RunWith(driverName string, opt Options) error {
 	defer stopReload()
 	logger.Printf("serving %s %q on :%d (discovery %s)", drv.Type, dev.Name(), portNum, strings.ToLower(*discovery))
 	return srv.Run(ctx)
+}
+
+// registerExtra registers one Extra-kind device built by build, its setup form, its
+// reloader and its settings path: the instance's state file with the kind's suffix, and
+// ".N" for a block after the first.
+func registerExtra(srv *server.Server, drv registry.Driver, instance string, k registry.Kind, num int,
+	build, rebuild func() (server.Device, server.Configurable, error)) error {
+	dev, sc, err := build()
+	if err != nil {
+		return err
+	}
+	if err := srv.Register(k.Type, num, dev); err != nil {
+		return err
+	}
+	// The path first: RegisterConfigurable loads the persisted settings from it.
+	if instance != "" {
+		stem := instance + drv.StateSuffix(k)
+		if num > 0 {
+			stem += "." + strconv.Itoa(num)
+		}
+		_ = srv.SettingsPath(k.Type, num, deviceStatePath(drv.Name, stem))
+	}
+	if sc != nil {
+		if err := srv.RegisterConfigurable(k.Type, num, sc); err != nil {
+			return err
+		}
+	}
+	return srv.SetReloader(k.Type, num, func(context.Context) (server.Device, server.Configurable, error) {
+		return rebuild()
+	})
 }
 
 // deviceStatePath returns the instance's settings path under StateDir.
