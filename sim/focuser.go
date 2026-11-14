@@ -30,7 +30,12 @@ func WithStepRate(stepsPerSec float64) FocuserOption {
 	return func(f *Focuser) { f.stepRate = stepsPerSec }
 }
 
-// NewFocuser creates a simulated Focuser at position 0.
+// WithFocuserPosition sets the start position, at rest.
+func WithFocuserPosition(pos int) FocuserOption {
+	return func(f *Focuser) { f.start, f.target = pos, pos }
+}
+
+// NewFocuser creates a simulated Focuser at position 0 unless WithFocuserPosition sets one.
 func NewFocuser(opts ...FocuserOption) *Focuser {
 	f := &Focuser{maxStep: 50000, stepRate: 5000}
 	f.ID = "goalpaca-sim-focuser-1"

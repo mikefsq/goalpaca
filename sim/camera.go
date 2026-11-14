@@ -45,6 +45,10 @@ type Camera struct {
 	hasExposure   bool // an exposure has been taken (StartExposure called)
 	exposing      bool // an exposure is currently active (not stopped/aborted)
 	expW, expH    int  // subframe geometry captured at StartExposure
+	expX, expY    int  // subframe origin captured at StartExposure
+	expBX, expBY  int  // binning captured at StartExposure
+
+	light *Light // panel coupling; nil = gradient only
 }
 
 // CameraOption configures a simulated Camera.
@@ -195,6 +199,7 @@ func (c *Camera) StartExposure(duration float64, light bool) error {
 	c.hasExposure = true
 	c.exposing = true
 	c.expW, c.expH = c.numX, c.numY // the frame is the geometry exposed, not a later ROI edit
+	c.expX, c.expY, c.expBX, c.expBY = c.startX, c.startY, c.binX, c.binY
 	return nil
 }
 
@@ -305,6 +310,11 @@ func (c *Camera) ImageFrame() (server.ImageFrame, error) {
 	w := c.expW
 	h := c.expH
 	buf := make([]byte, w*h*2)
+	if covered, frac := c.lightState(); covered {
+		g := lightGeom{w: w, h: h, x0: c.expX, y0: c.expY, fullW: c.CameraXSize() / c.expBX, fullH: c.CameraYSize() / c.expBY, binX: c.expBX, binY: c.expBY}
+		c.light.render(buf, g, frac, c.lastDuration, c.gain, c.offset)
+		return monoFrame(w, h, buf), nil
+	}
 	for x := 0; x < w; x++ {
 		var v uint16
 		if w > 0 {
@@ -315,6 +325,26 @@ func (c *Camera) ImageFrame() (server.ImageFrame, error) {
 			binary.LittleEndian.PutUint16(buf[off:], v)
 		}
 	}
+	return monoFrame(w, h, buf), nil
+}
+
+// SeesPanel reports whether a bound panel covers this camera, so ImageFrame returns panel light.
+// Wrappers that paint their own image check it to keep the panel frame.
+func (c *Camera) SeesPanel() bool {
+	covered, _ := c.lightState()
+	return covered
+}
+
+// lightState reports panel coverage and lit fraction; no Light = not covered.
+func (c *Camera) lightState() (bool, float64) {
+	if c.light == nil {
+		return false, 0
+	}
+	return c.light.state()
+}
+
+// monoFrame wraps w×h little-endian uint16 pixels as a rank-2 frame.
+func monoFrame(w, h int, buf []byte) server.ImageFrame {
 	return server.ImageFrame{
 		Rank:                    2,
 		Width:                   w,
@@ -322,7 +352,7 @@ func (c *Camera) ImageFrame() (server.ImageFrame, error) {
 		ElementType:             server.ImgInt32,
 		TransmissionElementType: server.ImgUInt16,
 		Pixels:                  buf,
-	}, nil
+	}
 }
 
 // --- Gain / Offset ---
